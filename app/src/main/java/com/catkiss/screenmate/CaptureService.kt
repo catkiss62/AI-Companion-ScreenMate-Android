@@ -86,7 +86,7 @@ class CaptureService: Service() {
         return metrics.widthPixels to metrics.heightPixels
     }
     private fun resize(w: Int,h: Int) {
-        val scale = minOf(1.0,(if(engine?.storyMode==true) 1920.0 else 1280.0)/maxOf(w,h))
+        val scale = minOf(1.0,(if(engine?.storyMode==true) 2880.0 else 1280.0)/maxOf(w,h))
         val nw=(w*scale).roundToInt().coerceAtLeast(2); val nh=(h*scale).roundToInt().coerceAtLeast(2)
         if(nw == width && nh == height && reader != null) return
         val replacement = ImageReader.newInstance(nw,nh,PixelFormat.RGBA_8888,2)
