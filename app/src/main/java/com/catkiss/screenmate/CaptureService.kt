@@ -184,12 +184,10 @@ class CaptureService: Service() {
     }
     private fun notification(text: String): Notification {
         val open=PendingIntent.getActivity(this,0,Intent(this,MainActivity::class.java),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val stop=PendingIntent.getService(this,1,Intent(this,CaptureService::class.java).setAction(STOP),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val pause=PendingIntent.getService(this,2,Intent(this,CaptureService::class.java).setAction(PAUSE),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this,"watch").setSmallIcon(android.R.drawable.ic_menu_view).setContentTitle("ScreenMate 陪看")
             .setContentText(text).setContentIntent(open).setOngoing(true)
-            .addAction(Notification.Action.Builder(null,"暂停 / 继续",pause).build())
-            .addAction(Notification.Action.Builder(null,"结束",stop).build()).build()
+            .addAction(Notification.Action.Builder(null,"暂停 / 继续",pause).build()).build()
     }
     private fun state(text: String) {
         status=text; overlay?.status(text)
