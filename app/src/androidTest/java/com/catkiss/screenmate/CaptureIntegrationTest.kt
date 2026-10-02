@@ -32,7 +32,7 @@ class CaptureIntegrationTest {
                 frames.incrementAndGet(); seen.complete(Unit)
                 return Observation("桌面测试","这是测试画面","","",false)
             }
-            override suspend fun reply(context: String,proactive: Boolean,fallback: Boolean)="我在这里陪你。"
+            override suspend fun reply(context: String,proactive: Boolean,fallback: Boolean)=if(proactive) "刚才那句看到了。" else "我在这里陪你。"
         }
         val oldKey=app.config.secret("deep")
         var session=0L
@@ -50,7 +50,7 @@ class CaptureIntegrationTest {
             start!!.click()
             withTimeout(20000) { seen.await() }
             val read=withTimeoutOrNull(30000) {
-                while(!withContext(Dispatchers.Main) { CaptureDiagnostics.ocrText.contains("局长") && CaptureDiagnostics.dialogueCount>0 }) delay(200)
+                while(!withContext(Dispatchers.Main) { CaptureDiagnostics.ocrText.contains("我们一起回去") && CaptureDiagnostics.dialogueCount>0 }) delay(200)
                 true
             }
             if(read!=true) withContext(Dispatchers.Main) {
@@ -60,7 +60,10 @@ class CaptureIntegrationTest {
             withContext(Dispatchers.Main) {
                 assertNotNull(CaptureDiagnostics.latest)
                 assertNotNull(CaptureDiagnostics.sent)
-                assertTrue(CaptureDiagnostics.ocrText.contains("一起"))
+                assertTrue(CaptureDiagnostics.ocrText.contains("我们一起回去"))
+                assertTrue(app.store.recent(CaptureService.instance!!.engine!!.sessionId).any {
+                    it.kind=="dialogue" && it.body.contains("我们一起回去")
+                })
             }
             withContext(Dispatchers.Main) {
                 val service=CaptureService.instance!!; session=service.engine!!.sessionId
