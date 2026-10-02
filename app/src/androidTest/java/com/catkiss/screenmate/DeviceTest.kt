@@ -155,4 +155,31 @@ class DeviceTest {
         withContext(Dispatchers.Main) { e.stop() }; app.deleteSession(id)
     }
 
+    @Test fun newObservationDoesNotHideAFailedUserTurnFromRetry() = runBlocking {
+        val id=app.store.create("test retry","video")
+        val failed=CompletableDeferred<Unit>(); val replied=CompletableDeferred<String>(); var calls=0
+        val fake=object: ModelGateway {
+            override suspend fun observe(base64: String,mode: String)=Observation("新画面","下一句","","",false)
+            override suspend fun reply(context: String,proactive: Boolean,fallback: Boolean): String {
+                calls++; if(calls<=2) throw ApiFailure(503)
+                assertTrue(context.contains("她刚才为什么离开")); return "她还没解释原因。"
+            }
+        }
+        lateinit var e: WatchEngine
+        withContext(Dispatchers.Main) {
+            MainActivity.visible=false
+            e=WatchEngine(app,id,"video",{ if(it.startsWith("回复失败")) failed.complete(Unit) },{ replied.complete(it) },fake)
+            e.send("她刚才为什么离开")
+        }
+        withTimeout(5000) { failed.await() }
+        withContext(Dispatchers.Main) {
+            e.frame("fake","after failure")
+            assertEquals("observation",app.store.recent(id,1).last().kind)
+            e.retryReply()
+        }
+        assertEquals("她还没解释原因。",withTimeout(5000) { replied.await() })
+        assertEquals(1,app.store.recent(id).count { it.kind=="user" })
+        withContext(Dispatchers.Main) { e.stop() }; app.deleteSession(id)
+    }
+
 }

@@ -78,6 +78,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
         val status = when { paused -> "已暂停，未观察当前画面"; !visible -> "分享的应用当前不可见"; age < 0 -> "尚无画面证据"; age > 60 -> "画面证据已过期，距采集${age}秒，不能当作当前画面"; else -> "最近一次画面采集距今${age}秒" }
         return JSONObject().put("task",if(proactive) "根据已观察的新节点决定简短主动反应" else "回复最后一条真实用户发言")
             .put("capture_status",status).put("mode",mode)
+            .put("current_user_message",if(proactive) "" else app.store.lastChat(sessionId)?.takeIf { it.kind=="user" }?.body ?: "")
             .put("session_summary",app.store.session(sessionId)?.summary ?: "")
             .put("past_session_memories",app.store.memories(sessionId))
             .put("recent_records",JSONArray().apply {
@@ -115,7 +116,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
     }
     fun retryReply() {
         if(closed || userReply) return
-        if(app.store.recent(sessionId,1).lastOrNull()?.kind != "user") { onState("没有待重试的用户消息"); return }
+        if(app.store.lastChat(sessionId)?.kind != "user") { onState("没有待重试的用户消息"); return }
         replyJob?.cancel(); reply(false)
     }
     fun pause() {

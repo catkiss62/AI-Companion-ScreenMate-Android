@@ -42,6 +42,10 @@ class Store(context: Context, name: String = "screenmate.db") : SQLiteOpenHelper
         "SELECT id,kind,body,time FROM entries WHERE session=? ORDER BY id DESC LIMIT ?", arrayOf("$id","$limit")).use { c ->
         buildList { while(c.moveToNext()) add(Entry(c.getLong(0),c.getString(1),c.getString(2),c.getLong(3))) }.reversed()
     }
+    fun lastChat(id: Long): Entry? = readableDatabase.rawQuery(
+        "SELECT id,kind,body,time FROM entries WHERE session=? AND kind IN ('user','assistant') ORDER BY id DESC LIMIT 1",arrayOf("$id")).use { c ->
+        if(c.moveToFirst()) Entry(c.getLong(0),c.getString(1),c.getString(2),c.getLong(3)) else null
+    }
     @Synchronized fun finish(id: Long) { writableDatabase.execSQL("UPDATE sessions SET state='pending' WHERE id=? AND state='active'", arrayOf(id)) }
     @Synchronized fun recover(): List<Long> {
         writableDatabase.execSQL("UPDATE sessions SET state='pending' WHERE state='active'")
