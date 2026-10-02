@@ -62,4 +62,16 @@ class PolicyTest {
     @Test fun emptyProviderContentIsAnError() {
         try { Wire.chatText(JSONObject("""{"choices":[{"message":{"content":null}}]}""")); fail() } catch(_: ApiFailure) { }
     }
+    @Test fun thinkingBudgetDoesNotConsumeAllVisibleOutput() {
+        val flash=Wire.visionBody("look","abc","gemini-2.5-flash").getJSONObject("generationConfig")
+        assertEquals(0,flash.getJSONObject("thinkingConfig").getInt("thinkingBudget"))
+        val relay=Wire.chatBody("[test]gemini-3.7-flash","role","data")
+        assertEquals("low",relay.getJSONObject("extra_body").getJSONObject("google").getJSONObject("thinking_config").getString("thinking_level"))
+        assertFalse(Wire.chatBody("deepseek-chat","role","data").has("extra_body"))
+    }
+    @Test fun truncatedSummaryIsNotCommittedAsACompleteMemory() {
+        try { Wire.chatText(JSONObject("""{"choices":[{"finish_reason":"length","message":{"content":"half a memory"}}]}""")); fail() }
+        catch(_: ApiFailure) { }
+    }
+
 }
