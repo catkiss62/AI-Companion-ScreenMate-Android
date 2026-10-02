@@ -17,6 +17,7 @@ class DialogueTracker {
             if(now-blankSince!!>=2000) emitted=""
             return null
         }
+        if(blankSince?.let { now-it>=2000 }==true) emitted=""
         blankSince=null
         if(key!=candidate) { candidate=key; candidateSince=now; return null }
         if(now-candidateSince<650 || key==emitted) return null

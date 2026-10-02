@@ -49,8 +49,13 @@ class CaptureIntegrationTest {
             }
             start!!.click()
             withTimeout(20000) { seen.await() }
-            withTimeout(30000) {
+            val read=withTimeoutOrNull(30000) {
                 while(!withContext(Dispatchers.Main) { CaptureDiagnostics.ocrText.contains("局长") && CaptureDiagnostics.dialogueCount>0 }) delay(200)
+                true
+            }
+            if(read!=true) withContext(Dispatchers.Main) {
+                val d=CaptureDiagnostics
+                fail("OCR fixture missing: raw=${d.ocrText}; count=${d.dialogueCount}; note=${d.note}; visible=${d.visibility}; main=${MainActivity.visible}; status=${CaptureService.status}; dark=${d.latest?.darkPercent}")
             }
             withContext(Dispatchers.Main) {
                 assertNotNull(CaptureDiagnostics.latest)
@@ -91,7 +96,20 @@ class CaptureIntegrationTest {
             assertTrue(app.store.recent(session).any { it.kind=="assistant" })
             assertTrue(frames.get()>0)
         } finally {
-            withContext(Dispatchers.Main) { CaptureService.instance?.end(); app.gateway=null }
+            withContext(Dispatchers.Main) {
+                listOf("qa-captured.jpg" to CaptureDiagnostics.latest,"qa-sent.jpg" to CaptureDiagnostics.sent).forEach { (name,frame) ->
+                    if(frame!=null && android.os.Build.VERSION.SDK_INT>=29) {
+                        val values=android.content.ContentValues().apply {
+                            put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,name)
+                            put(android.provider.MediaStore.Images.Media.MIME_TYPE,"image/jpeg")
+                            put(android.provider.MediaStore.Images.Media.RELATIVE_PATH,"Pictures/ScreenMateQA")
+                        }
+                        val uri=app.contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)!!
+                        app.contentResolver.openOutputStream(uri)!!.use { it.write(frame.jpeg) }
+                    }
+                }
+                CaptureService.instance?.end(); app.gateway=null
+            }
             if(session!=0L) app.deleteSession(session)
             app.config.setSecret("deep",oldKey)
             device.setOrientationNatural(); device.unfreezeRotation(); scenario?.close()

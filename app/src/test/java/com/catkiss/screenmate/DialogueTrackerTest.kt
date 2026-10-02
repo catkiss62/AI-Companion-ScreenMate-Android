@@ -20,7 +20,7 @@ class DialogueTrackerTest {
         t.accept("局长：你好",0); assertNotNull(t.accept("局长：你好",750))
         assertNull(t.accept("局长： 你好",1500))
         t.accept("海拉：走吧",2250); assertFalse(t.accept("海拉：走吧",3000)!!.extension)
-        t.accept("",3750); t.accept("",6000)
+        t.accept("",3750) // A static blank screen need not deliver more frames.
         t.accept("海拉：走吧",6750); assertNotNull(t.accept("海拉：走吧",7500))
     }
     @Test fun pausedCandidateCannotCommitOnResume() {

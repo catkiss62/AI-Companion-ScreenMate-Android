@@ -57,9 +57,11 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: |
-            gradle --no-daemon :app:connectedDebugAndroidTest
+            result=0
+            gradle --no-daemon :app:connectedDebugAndroidTest || result=$?
             mkdir -p app/build/reports/device-ui
-            adb pull /sdcard/Pictures/ScreenMateQA/qa-home.png app/build/reports/device-ui/qa-home.png
+            adb pull /sdcard/Pictures/ScreenMateQA/. app/build/reports/device-ui/ || true
+            exit "$result"
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v4

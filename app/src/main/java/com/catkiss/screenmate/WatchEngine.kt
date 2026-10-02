@@ -44,7 +44,8 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
         }
     }
     private fun commitDialogue(line: DialogueTracker.Line, capturedAt: Long) {
-        latestAt=maxOf(latestAt,capturedAt); evidenceVersion++
+        latestAt=maxOf(latestAt,capturedAt)
+        if(!line.extension) evidenceVersion++
         record("dialogue", "${if(line.extension) "同页文字补充（勿当作另一句）" else "本地识别对白（可能有错字或漏字）"}：\n${line.text}", capturedAt)
         CaptureDiagnostics.dialogueCount++
         onState("陪看中 · 已记录 ${CaptureDiagnostics.dialogueCount} 段对白")
@@ -138,7 +139,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
                 catch(_: Exception) { fallback = true; models.reply(data,proactive,true) }
                 if(closed || ticket != policy.epoch || serial != replySerial) return@launch
                 CaptureDiagnostics.replyMillis=SystemClock.elapsedRealtime()-replyStarted
-                if(proactive && version!=evidenceVersion) { onState("剧情已推进，略过过时评论"); return@launch }
+                if(proactive && !ReactionFreshness.accepts(storyMode,evidenceVersion-version)) { onState("剧情已推进，略过过时评论"); return@launch }
                 if(proactive && (!policy.active || !visible || MainActivity.visible || SystemClock.elapsedRealtime()-observedAt > 60_000)) return@launch
                 if(!proactive || response.trim() != "SILENT") {
                     record("assistant",response)

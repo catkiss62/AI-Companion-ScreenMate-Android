@@ -32,6 +32,40 @@ class StoryPipelineTest {
             assertTrue(result.text.contains("一起"))
         } finally { recognizer.close(); bitmap.recycle() }
     }
+    @Test fun normalPageAdvanceDoesNotSilenceAnInFlightStoryReaction() = runBlocking {
+        val id=app.store.create("recent story reaction","无期迷途 · 剧情")
+        val began=CompletableDeferred<Unit>(); val release=CompletableDeferred<Unit>(); val shown=CompletableDeferred<String>()
+        val fake=object: ModelGateway {
+            override suspend fun observe(base64: String,mode: String)=error("No cloud image needed")
+            override suspend fun reply(context: String,proactive: Boolean,fallback: Boolean): String {
+                assertTrue(context.contains("回来了")); began.complete(Unit); release.await()
+                return "刚才那句欢迎，还挺温柔的。"
+            }
+        }
+        lateinit var e: WatchEngine
+        try {
+            withContext(Dispatchers.Main) {
+                MainActivity.visible=false
+                e=WatchEngine(app,id,"无期迷途 · 剧情",{}, { shown.complete(it) },fake)
+                val now=SystemClock.elapsedRealtime()
+                e.localText("局长：你回来了。",now-800,e.captureEpoch)
+                e.localText("局长：你回来了。",now,e.captureEpoch)
+            }
+            withTimeout(5000) { began.await() }
+            withContext(Dispatchers.Main) {
+                val now=SystemClock.elapsedRealtime()
+                e.localText("海拉：嗯，出发吧。",now-800,e.captureEpoch)
+                e.localText("海拉：嗯，出发吧。",now,e.captureEpoch)
+            }
+            release.complete(Unit)
+            assertEquals("刚才那句欢迎，还挺温柔的。",withTimeout(5000) { shown.await() })
+            assertEquals(2,app.store.recent(id).count { it.kind=="dialogue" })
+        } finally {
+            release.complete(Unit)
+            withContext(Dispatchers.Main) { e.stop() }
+            app.deleteSession(id)
+        }
+    }
     @Test fun dialogueContinuesThroughSlowCloudAndReplyAndDropsLatePauseResult() = runBlocking {
         val id=app.store.create("story pipeline test","无期迷途 · 剧情")
         val visionStarted=CompletableDeferred<Unit>()
@@ -72,6 +106,10 @@ class StoryPipelineTest {
                 e.localText("海拉：先离开这里。",now-800,epoch)
                 e.localText("海拉：先离开这里。",now,epoch)
                 assertEquals(2,app.store.recent(id).count { it.kind=="dialogue" })
+                listOf("局长：前方有敌人。","海拉：准备战斗。","局长：大家撤退！").forEach { line ->
+                    e.localText(line,now-800,epoch); e.localText(line,now,epoch)
+                }
+                assertEquals(5,app.store.recent(id).count { it.kind=="dialogue" })
             }
             releaseReply.complete(Unit); withTimeout(5000) { replyFinished.await() }
             withContext(Dispatchers.Main) {
@@ -84,7 +122,7 @@ class StoryPipelineTest {
             }
             releaseVision.complete(Unit); delay(100)
             withContext(Dispatchers.Main) {
-                assertEquals(2,app.store.recent(id).size)
+                assertEquals(5,app.store.recent(id).size)
                 assertTrue(shown.isEmpty())
             }
         } finally {

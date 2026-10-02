@@ -44,3 +44,8 @@ object TextBounds {
     fun compact(raw: String, limit: Int) = raw.trim().take(limit)
     fun sameEvidence(a: String, b: String): Boolean = a.filterNot(Char::isWhitespace) == b.filterNot(Char::isWhitespace)
 }
+
+/** A story reaction can concern the last few lines; advancing one line is not a scene cut. */
+object ReactionFreshness {
+    fun accepts(story: Boolean, newerPages: Long) = newerPages in 0..(if(story) 3L else 0L)
+}
