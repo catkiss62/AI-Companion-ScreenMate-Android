@@ -1,3 +1,45 @@
 # ScreenMate Android
 
-独立平板陪看实验。开发和未发布测试 APK 在 `agent/v010-screenmate` 分支；main 仅初始化，暂不合并或正式发布。
+小米 Pad 6 Pro / HyperOS 平板上的独立陪看实验。首版面向 B站、浏览器视频，以及《无期迷途》的文字剧情。
+
+- Android 原生 Kotlin；最低 Android 8，编译/目标 API 35。
+- 系统授权屏幕共享 + 前台服务；每次开始重新授权；支持单应用共享和尺寸变化。
+- 官方 Gemini 识图 → 文字证据 → 独立中转 Gemini 回复；DeepSeek 分段整理与回复失败兜底。
+- 可拖动、左右停靠、自动朝内的伙伴浮窗；点击聊天，默认收起；新回复只弹跳一次。
+- 暂停 / 继续 / 结束；取消旧请求；用户发言优先；画面无变化不反复评论。
+- 会话文字立即写入 SQLite；分段摘要、后台归档重试、进程中断恢复、单会话删除与文字导出。
+- 不接 TTS，不录音，不接手机记忆同步。截图不落盘。API Key 使用 Android Keystore 加密，不随备份导出。
+
+## 配置和使用
+
+安装 CI 的未发布测试 APK，进入“接口与陪伴设置”。官方 Gemini 需独立 Key，先读取模型列表，再选择账户实际可用且支持图片输入的 Flash 模型。列表表示 API 可用，不保证免费；额度以 AI Studio 项目页面为准。第二通道使用完整 OpenAI 兼容 `/chat/completions` 地址、Key 和中转站模型名；DeepSeek 同理。
+
+默认每 15 秒最多识图一次，主动评论最短间隔 90 秒；仅有新内容且值得评论时才调用第二通道。每日本机识图上限默认 200 次，可调整，按太平洋日期计数。这是本机预算控制，不是 Google 免费额度声明。429 和网络失败会退避，没有自动密集重试。
+
+开始时允许悬浮窗并选择分享目标应用，随后切回视频或游戏。建议单应用共享；分享整个屏幕会包含其他应用，务必自行避开私密画面。浮窗与配置页面设置了 FLAG_SECURE，在全屏共享中可能出现小块黑色遮罩；伙伴以外的区域不拦截点击。进入设置自动暂停，手动继续后等待新画面。点“结束”释放共享资源并排队归档。无网络时记录保留，恢复网络后自动重试。
+
+HyperOS 可在应用设置允许后台运行，按需将省电策略改为无限制。系统回收后不自动恢复屏幕共享，需要再次开始。受 DRM / FLAG_SECURE 保护的视频可能黑屏，本项目不绕过系统保护。没有音频输入，无法理解无字幕对白；采样间隔内快速跳过的剧情可能遗漏。
+
+## 伙伴图片
+
+当前是原创代码绘制的小鲸鱼占位。支持本机导入 12 MB 以内 PNG/JPG 等系统支持图片，自动限制尺寸。参考 [MeteorNOX/DeepSeek-Balance-Whale-Widget](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget) 的朝向与弹跳思路，但没有复制人物图片；该项目人物资产的许可不同于代码 MIT。用户可以在本机自行选择获准使用的图片，不上传本仓库。
+
+## 构建与验证
+
+JDK 17、Android SDK 35、Gradle 8.11.1：
+
+```sh
+gradle :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+gradle :app:connectedDebugAndroidTest
+```
+
+CI 在 `agent/**` 分支推送后执行单元测试、lint、Android 35 平板模拟器测试，全部通过才上传 APK artifact 并创建 Draft。测试签名保存在独立 Draft 资产中，后续 APK 可覆盖安装。不会合并 main，也不会发布正式版本。不要发布签名资产 Draft。
+
+本地未配置 Android SDK 时以 CI 为构建证据。当前状态及待验证项见 [项目总账](SCREENMATE_当前总账.md)。
+
+## 实现参考
+
+- [Android MediaProjection](https://developer.android.com/media/grow/media-projection)
+- [Gemini generateContent](https://ai.google.dev/api/generate-content)
+- [Gemini 项目限额](https://aistudio.google.com/rate-limit)
+- [参考项目素材来源声明](https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/blob/main/PROVENANCE.md)

@@ -1,0 +1,84 @@
+name: ScreenMate test APK
+on:
+  push:
+    branches: ['agent/**']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: screenmate-test-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Restore persistent test signer (draft only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" > /tmp/releases.json
+          count=$(jq '[.[] | select(.tag_name == "screenmate-test-signer")] | length' /tmp/releases.json)
+          if [ "$count" = "0" ]; then
+            keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=ScreenMate Test,O=catkiss62,C=CN' >/dev/null 2>&1
+            gh release create screenmate-test-signer "$HOME/.android/debug.keystore" --draft --title 'ScreenMate persistent test signer (do not publish)' --notes 'Private draft asset for repeatable test APK updates. Never publish this draft.' --target "$GITHUB_SHA"
+          else
+            test "$(jq -r '.[] | select(.tag_name == "screenmate-test-signer") | .draft' /tmp/releases.json)" = 'true'
+            gh release download screenmate-test-signer --pattern debug.keystore --dir "$HOME/.android" --clobber
+          fi
+      - name: Compile, unit tests and Android lint
+        run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Android 35 device tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_tablet
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: gradle --no-daemon :app:connectedDebugAndroidTest
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenmate-verification-${{ github.run_number }}
+          path: |
+            app/build/reports/
+            app/build/outputs/androidTest-results/
+            app/build/test-results/
+          retention-days: 30
+      - name: Package unpublished test APK
+        shell: bash
+        run: |
+          mkdir -p deliverables
+          cp app/build/outputs/apk/debug/app-debug.apk deliverables/ScreenMate-0.1.0-test.apk
+          sha256sum deliverables/ScreenMate-0.1.0-test.apk > deliverables/SHA256SUMS.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs deliverables/ScreenMate-0.1.0-test.apk > deliverables/APK-signature.txt
+          printf 'Commit: %s\nCI: %s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > deliverables/BUILD.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ScreenMate-0.1.0-test
+          path: deliverables/
+          retention-days: 60
+      - name: Save APK in a draft (never publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "screenmate-v0.1.0-test-${GITHUB_RUN_NUMBER}" deliverables/* --draft --title "ScreenMate 0.1.0 test · CI ${GITHUB_RUN_NUMBER}" --notes "Unpublished tablet test build. No TTS or phone memory sync. See BUILD.txt and the repository ledger for validation and limitations." --target "$GITHUB_SHA"
