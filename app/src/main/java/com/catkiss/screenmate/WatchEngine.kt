@@ -13,6 +13,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
     private var visionJob: Job? = null
     private var replyJob: Job? = null
     private var userReply = false
+    private var replySerial = 0L
     private var closed = false
     private var latestAt = 0L
     private var identity = ""
@@ -52,7 +53,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
             catch(e: Exception) {
                 if(policy.accepts(ticket)) {
                     policy.failed(SystemClock.elapsedRealtime(),(e as? ApiFailure)?.retrySeconds)
-                    onState("识图：${e.message ?: "暂时失败"}；稍后重试")
+                    onState("识图：${if(e is ApiFailure) e.message else "暂时失败"}；稍后重试")
                 }
             }
         }
@@ -86,6 +87,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
             }).toString()
     }
     private fun reply(proactive: Boolean) {
+        val serial = ++replySerial
         val ticket = policy.epoch
         val observedAt = latestAt
         if(proactive) policy.commented(SystemClock.elapsedRealtime())
@@ -97,16 +99,16 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
                 var fallback = false
                 val response = try { models.reply(data,proactive) } catch(e: CancellationException) { throw e }
                 catch(_: Exception) { fallback = true; models.reply(data,proactive,true) }
-                if(closed || ticket != policy.epoch) return@launch
+                if(closed || ticket != policy.epoch || serial != replySerial) return@launch
                 if(proactive && (!policy.active || !visible || MainActivity.visible || SystemClock.elapsedRealtime()-observedAt > 60_000)) return@launch
-                if(response.trim() != "SILENT") {
+                if(!proactive || response.trim() != "SILENT") {
                     record("assistant",response)
                     onMessage(response)
                 }
                 onState(if(fallback) "本次由 DeepSeek 兜底回复" else if(paused) "已暂停观察" else "陪看中")
             } catch(e: CancellationException) { throw e }
-            catch(e: Exception) { if(!closed && ticket == policy.epoch) onState("回复失败，可重试：${e.message ?: "请检查网络"}") }
-            finally { if(ticket == policy.epoch) userReply = false }
+            catch(e: Exception) { if(!closed && ticket == policy.epoch && serial == replySerial) onState("回复失败，可重试：${if(e is ApiFailure) e.message else "请检查接口配置或网络"}") }
+            finally { if(ticket == policy.epoch && serial == replySerial) userReply = false }
         }
     }
     fun retryReply() {

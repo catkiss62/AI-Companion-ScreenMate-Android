@@ -119,7 +119,7 @@ class MainActivity: Activity() {
                     if(models.isEmpty()) message("账户没有可用的 generateContent 模型")
                     else AlertDialog.Builder(this@MainActivity).setTitle("选择支持图片输入的模型；免费资格请看 AI Studio")
                         .setItems(models.toTypedArray()) { _,which -> visionModel.setText(models[which]) }.show()
-                } catch(e: Exception) { if(e is CancellationException) throw e; message(e.message ?: "读取失败") }
+                } catch(e: Exception) { if(e is CancellationException) throw e; message(if(e is ApiFailure) e.message ?: "读取失败" else "读取失败，请检查 Key 与网络") }
             }
         }
         val relayUrl=field("第二通道完整接口地址（OpenAI 兼容）",c.relayUrl)
