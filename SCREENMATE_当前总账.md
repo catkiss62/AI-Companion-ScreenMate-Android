@@ -21,16 +21,33 @@
 9. Key 用 Keystore AES-GCM；关闭系统备份；配置页/浮窗 FLAG_SECURE；接口 HTTPS，拒绝地址内凭据/查询参数，禁止 HTTP 重定向转发 Key。屏幕证据作为数据，提示不服从画面中的指令，不假装听到声音，不剧透。
 10. 本机每日识图预算默认 200，太平洋日期；不是供应商免费额度。可用模型从官方账户读取，不把过时 Gemini 聊天页面的 1500 RPD 当作保证。
 
-## 构建与验收状态
+## 构建与验收状态（已完成，待用户实机试用）
 
-- 版本：0.1.0 / versionCode 1。
-- CI 37022344136：14 项单元测试、12 项 Android 35 平板设备测试全部通过，lint 0 error；已取得并目视检查平板首页截图。测试截图通过 MediaStore 保留，不随测试卸载消失；仅测试代码保存此图，产品截图仍只在内存处理。
-- 下载 APK 复核发现 AGP 选择了临时 Android Debug 证书，未使用已保存的固定测试证书。Draft `screenmate-v0.1.0-test-8` 仅为中间产物，不交付。已在 Gradle 显式绑定 SCREENMATE_TEST_KEYSTORE，并在打包阶段比较 APK 签名证书与保存证书的 SHA-256，正在重跑交付构建。
-- CI 已修正：SDK 安装不再请求已移除的 tools 包；CaptureService 的模型注入回调参数绑定；API 26 主题不直接引用 API 27 导航栏属性。
-- 已补入真实屏幕共享集成测试：系统授权 → 前台服务 → 截图 → 浮窗输入/回复 → 旋转 → 结束。模型使用测试替身，不消耗真实 API。
-- 本环境只有 JDK 17，无 Android SDK/Gradle，完整构建由 GitHub Actions 执行。
-- CI 必须全部通过后才创建未发布 APK Draft；测试签名单独保存在 Draft，禁止正式发布。
-- 已编写的测试范围：生命周期迟到结果、用户优先、限流退避、接口格式、thought 过滤、Key 加密、SQLite 删除/游标/崩溃恢复、真实 WatchEngine 取消和兜底、主界面重建。
+- 版本：0.1.0 / versionCode 1，APK 2,889,180 bytes，原生通用 APK，无 CPU 架构限制。
+- 构建源码提交：`b31f28a945cb1bdff2a306fc8e0d66d74e556792`；分支 `agent/v010-screenmate`。
+- [最终 CI 37023613524](https://github.com/catkiss62/AI-Companion-ScreenMate-Android/actions/runs/37023613524)：success。
+- 14 项 JVM 单元测试 + 12 项 Android 35 平板设备测试，全部通过，0 failure / 0 error / 0 skipped。Android lint 0 error，15 个非阻塞 warning（包含版本更新建议、手工 View 构造/布局等），不宣称零警告。
+- 已验证真实系统共享授权、前台服务、实际 JPEG 截图、浮窗聊天输入/回复、旋转、结束释放，以及密钥加密、会话恢复/删除、摘要游标、迟到取消、用户优先、失败兜底与观察插入后的重试。
+- 模型调用使用测试替身；未使用用户真实 API Key，未验证实际模型回复质量和费用。官方/中转协议及思考预算、截断输出保护有单元测试。
+- 平板首页截图已保存并目视检查，主体入口无重叠，页面可以滚动。截图在测试中通过 MediaStore 留存；产品屏幕截图仍只在内存处理。
+- [未发布测试 APK Draft](https://github.com/catkiss62/AI-Companion-ScreenMate-Android/releases/tag/untagged-da84c1cc46a28f4d119b)：release ID `401916483`，tag `screenmate-v0.1.0-test-9`，draft=true。
+- APK 资产 ID `605848141`；Actions APK artifact ID `11234750380`；验证报告 artifact ID `11234740403`。
+- APK SHA-256：`e6865dac9c416008429b34f007a6f18e8c853166199b83cea620d7eb358fb7c8`。已下载并独立计算匹配。
+- 固定测试签名证书 SHA-256：`41b382bec75989fbebaec0721f331cb247f91612a4a585aab9a66d5d817b230f`，DN `CN=ScreenMate Test, O=catkiss62, C=CN`。
+- Gradle 明确使用 `SCREENMATE_TEST_KEYSTORE`，CI 同时验证 APK 有效签名以及签名证书与持久保存证书一致。签名资产位于 `screenmate-test-signer` Draft，禁止正式发布或替换密钥。
+- 中间产物 `screenmate-v0.1.0-test-8` 使用了临时 Android Debug 证书，**不要安装或交付**；最终只使用上面的 test-9。
+- main 仍只有初始化说明，提交 `083a3dddfd80c92b808654f9754893ea02f388e7`；没有合并或正式发布。
+- 原 `ai-companion-build` 工作树保持干净，仍在本地 `5f198bd`，本轮没有修改手机端。
+
+### 已修复的构建与接续问题
+
+SDK 安装不再请求已移除的 tools 包；回调注入绑定已修复；API 26 主题单独兼容 API 27 导航栏属性；系统授权测试使用当前弹窗兼容定位；测试截图不会因 AGP 卸载被清理；签名路径显式绑定并校验证书一致性。
+
+用户输入抢占主动评论后，旧请求不能释放新回复的忙碌状态。失败用户消息由独立聊天查询定位，后来的画面观察不会遮住“重试”。Gemini 3 使用低思考扩展，2.5 Flash 官方识图关闭思考预算；摘要输出预算 4096，截断结果不推进摘要游标。
+
+## 下一窗口接手顺序
+
+先读本总账，再检查当前分支与最后构建源码提交。首版功能已完成；下一步优先处理用户真实平板反馈，不继续扩大范围。用户没有提供 API Key，不得把测试替身通过写成真实 API 或 HyperOS 实机通过。Key 在平板设置里填写，人物图片在本机导入。保留固定测试签名和当前 applicationId，升级时增加 versionCode。
 
 ## 实机仍需验证
 
