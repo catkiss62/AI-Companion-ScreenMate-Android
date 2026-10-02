@@ -58,7 +58,7 @@ jobs:
           script: |
             gradle --no-daemon :app:connectedDebugAndroidTest
             mkdir -p app/build/reports/device-ui
-            adb pull /sdcard/Android/data/com.catkiss.screenmate/files/qa-home.png app/build/reports/device-ui/qa-home.png
+            adb pull /sdcard/Pictures/ScreenMateQA/qa-home.png app/build/reports/device-ui/qa-home.png
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v4

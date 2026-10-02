@@ -24,7 +24,7 @@
 ## 构建与验收状态
 
 - 版本：0.1.0 / versionCode 1。
-- 当前应用编译、12 项单元测试、Android lint 已通过；Android 35 平板模拟器测试进行中，尚不能宣布 APK 全部通过。
+- CI 37020715734：应用编译、12 项单元测试、Android lint、11 项 Android 35 平板设备测试全部通过。最后保存 QA 截图时，因 AGP 测试结束卸载应用导致 app-specific 文件被清理，产物收集失败；已将测试截图改存模拟器 MediaStore 公共图片目录，正在重跑。只有测试代码使用此截图保存方式，产品截图仍只在内存处理。
 - CI 已修正：SDK 安装不再请求已移除的 tools 包；CaptureService 的模型注入回调参数绑定；API 26 主题不直接引用 API 27 导航栏属性。
 - 已补入真实屏幕共享集成测试：系统授权 → 前台服务 → 截图 → 浮窗输入/回复 → 旋转 → 结束。模型使用测试替身，不消耗真实 API。
 - 本环境只有 JDK 17，无 Android SDK/Gradle，完整构建由 GitHub Actions 执行。

@@ -62,7 +62,15 @@ class DeviceTest {
                 val view=activity.window.decorView
                 val bitmap=android.graphics.Bitmap.createBitmap(view.width,view.height,android.graphics.Bitmap.Config.ARGB_8888)
                 view.draw(android.graphics.Canvas(bitmap))
-                java.io.File(activity.getExternalFilesDir(null),"qa-home.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it) }
+                if(android.os.Build.VERSION.SDK_INT>=29) {
+                    val values=android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,"qa-home.png")
+                        put(android.provider.MediaStore.Images.Media.MIME_TYPE,"image/png")
+                        put(android.provider.MediaStore.Images.Media.RELATIVE_PATH,"Pictures/ScreenMateQA")
+                    }
+                    val uri=activity.contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)!!
+                    activity.contentResolver.openOutputStream(uri)!!.use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it) }
+                }
                 bitmap.recycle()
             }
         }
