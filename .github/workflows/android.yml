@@ -40,6 +40,7 @@ jobs:
             test "$(jq -r '.[] | select(.tag_name == "screenmate-test-signer") | .draft' /tmp/releases.json)" = 'true'
             gh release download screenmate-test-signer --pattern debug.keystore --dir "$HOME/.android" --clobber
           fi
+          echo "SCREENMATE_TEST_KEYSTORE=$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
       - name: Compile, unit tests and Android lint
         run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Enable emulator acceleration
@@ -76,6 +77,9 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk deliverables/ScreenMate-0.1.0-test.apk
           sha256sum deliverables/ScreenMate-0.1.0-test.apk > deliverables/SHA256SUMS.txt
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs deliverables/ScreenMate-0.1.0-test.apk > deliverables/APK-signature.txt
+          expected=$(keytool -exportcert -alias androiddebugkey -keystore "$SCREENMATE_TEST_KEYSTORE" -storepass android 2>/dev/null | sha256sum | cut -d ' ' -f 1)
+          actual=$(sed -n 's/Signer #1 certificate SHA-256 digest: //p' deliverables/APK-signature.txt)
+          test "$actual" = "$expected"
           printf 'Commit: %s\nCI: %s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > deliverables/BUILD.txt
       - uses: actions/upload-artifact@v4
         with:
