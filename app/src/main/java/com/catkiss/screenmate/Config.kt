@@ -46,6 +46,21 @@ class Config(context: Context) {
     var dailyCap: Int
         get() = prefs.getInt("cap", 200).coerceIn(1, 5000)
         set(v) { prefs.edit().putInt("cap", v.coerceIn(1, 5000)).apply() }
+    var dialogueTop: Int
+        get() = prefs.getInt("dialogueTop", 55).coerceIn(0, 90)
+        set(v) { prefs.edit().putInt("dialogueTop", v.coerceIn(0, 90)).apply() }
+    var dialogueBottom: Int
+        get() = prefs.getInt("dialogueBottom", 98).coerceIn(10, 100)
+        set(v) { prefs.edit().putInt("dialogueBottom", v.coerceIn(10, 100)).apply() }
+    fun petPosition(landscape: Boolean): Pair<Float, Float>? {
+        val prefix = if(landscape) "petLandscape" else "petPortrait"
+        if(!prefs.contains(prefix+"X")) return null
+        return prefs.getFloat(prefix+"X", .9f) to prefs.getFloat(prefix+"Y", .9f)
+    }
+    fun savePetPosition(landscape: Boolean, x: Float, y: Float) {
+        val prefix = if(landscape) "petLandscape" else "petPortrait"
+        prefs.edit().putFloat(prefix+"X",x.coerceIn(0f,1f)).putFloat(prefix+"Y",y.coerceIn(0f,1f)).apply()
+    }
     private fun key(): SecretKey {
         val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         (ks.getKey("screenmate.keys", null) as? SecretKey)?.let { return it }

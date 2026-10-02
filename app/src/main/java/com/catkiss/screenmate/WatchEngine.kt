@@ -18,44 +18,74 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
     private var latestAt = 0L
     private var identity = ""
     private var records = 0
+    private val dialogue = DialogueTracker()
+    private var settleJob: Job? = null
+    private var evidenceVersion = 0L
+    val storyMode = mode.contains("无期迷途")
+    val captureEpoch get() = policy.epoch
     private var lastHash: String? = null
     private var lastFrameAt = 0L
     var paused = false; private set
     var visible = true
     val busy get() = userReply
-    val canCapture get() = !closed && !paused && visible && !MainActivity.visible && visionJob?.isActive != true &&
-        policy.mayObserve(SystemClock.elapsedRealtime()) && app.store.usage("vision") < app.config.dailyCap
-
-    fun frame(base64: String, hash: String) {
-        if(!canCapture) return
-        val now = SystemClock.elapsedRealtime()
-        if(hash == lastHash && now - lastFrameAt < 60_000) {
-            policy.observed(now,app.config.intervalSeconds * 1000L); return
+    // Local observation continues even during cloud requests, rate limiting or daily budget exhaustion.
+    val canCapture get() = !closed && !paused && visible && !MainActivity.visible
+    fun acceptsCapture(epoch: Long) = canCapture && policy.accepts(epoch)
+    fun localText(text: String, capturedAt: Long, epoch: Long) {
+        if(!storyMode || !acceptsCapture(epoch)) return
+        CaptureDiagnostics.ocrText=text
+        settleJob?.cancel()
+        val line=dialogue.accept(text,capturedAt)
+        if(line!=null) commitDialogue(line,capturedAt)
+        else settleJob=scope.launch {
+            // Static surfaces need not produce a second ImageReader frame.
+            delay(1000)
+            if(acceptsCapture(epoch)) dialogue.accept(text,SystemClock.elapsedRealtime())?.let { commitDialogue(it,capturedAt) }
         }
-        lastHash = hash; lastFrameAt = now
+    }
+    private fun commitDialogue(line: DialogueTracker.Line, capturedAt: Long) {
+        latestAt=maxOf(latestAt,capturedAt); evidenceVersion++
+        record("dialogue", "${if(line.extension) "同页文字补充（勿当作另一句）" else "本地识别对白（可能有错字或漏字）"}：\n${line.text}", capturedAt)
+        CaptureDiagnostics.dialogueCount++
+        onState("陪看中 · 已记录 ${CaptureDiagnostics.dialogueCount} 段对白")
+        maybeComment(true)
+    }
+    private fun maybeComment(interesting: Boolean) {
+        if(replyJob?.isActive != true && policy.mayComment(SystemClock.elapsedRealtime(),latestAt,interesting,app.config.commentSeconds*1000L))
+            reply(proactive=true)
+    }
+    fun frame(base64: String, hash: String, capturedAt: Long = SystemClock.elapsedRealtime(), diagnostic: CaptureDiagnostics.Frame? = null) {
+        val now = SystemClock.elapsedRealtime()
+        if(!canCapture || visionJob?.isActive == true || !policy.mayObserve(now) || app.store.usage("vision")>=app.config.dailyCap) return
+        if(hash == lastHash && now-lastFrameAt<60_000) return
         val ticket = policy.epoch
-        onState("正在看画面…")
+        val versionAtCapture=evidenceVersion
+        // Spacing is between request starts, not response completion plus another interval.
+        policy.requested(now,app.config.intervalSeconds*1000L)
+        CaptureDiagnostics.sent=diagnostic
+        onState("正在补充画面理解 · 对白仍持续记录")
         visionJob = scope.launch {
             try {
                 val observation = models.observe(base64,mode)
                 if(!policy.accepts(ticket)) return@launch
-                policy.observed(SystemClock.elapsedRealtime(),app.config.intervalSeconds * 1000L)
-                // Timestamp is capture time, not network completion time.
-                latestAt = now
+                policy.succeeded()
+                CaptureDiagnostics.visionMillis=SystemClock.elapsedRealtime()-now
+                lastHash=hash; lastFrameAt=capturedAt
+                if(capturedAt>latestAt) latestAt=capturedAt
                 val novel = !TextBounds.sameEvidence(identity,observation.identity())
                 if(novel) {
                     identity = observation.identity()
-                    record("observation",observation.evidence())
+                    record("observation",observation.evidence(),capturedAt)
+                    if(!storyMode) evidenceVersion++
                 }
-                onState("陪看中 · 识图 ${app.store.usage("vision")}/${app.config.dailyCap} 次（本机上限）")
-                if(novel && replyJob?.isActive != true && policy.mayComment(SystemClock.elapsedRealtime(),latestAt,observation.interesting,app.config.commentSeconds * 1000L)) {
-                    reply(proactive=true)
-                }
+                onState("陪看中 · 对白 ${CaptureDiagnostics.dialogueCount} 段 · 云端识图 ${app.store.usage("vision")}/${app.config.dailyCap}")
+                // A slow visual result must not provoke a reaction to a previous page.
+                if(novel && (!storyMode || versionAtCapture==evidenceVersion)) maybeComment(observation.interesting)
             } catch(e: CancellationException) { throw e }
             catch(e: Exception) {
                 if(policy.accepts(ticket)) {
                     policy.failed(SystemClock.elapsedRealtime(),(e as? ApiFailure)?.retrySeconds)
-                    onState("识图：${if(e is ApiFailure) e.message else "暂时失败"}；稍后重试")
+                    onState("云端识图：${if(e is ApiFailure) e.message else "暂时失败"}；本地对白继续记录")
                 }
             }
         }
@@ -68,16 +98,18 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
         reply(false)
         return true
     }
-    private fun record(kind: String, text: String) {
-        app.store.add(sessionId,kind,text)
+    private fun record(kind: String, text: String, capturedAt: Long? = null) {
+        val wallTime = capturedAt?.let { System.currentTimeMillis()-(SystemClock.elapsedRealtime()-it) } ?: System.currentTimeMillis()
+        app.store.add(sessionId,kind,text,wallTime)
         records++
         if(records % 30 == 0) app.archive(sessionId)
     }
     private fun context(proactive: Boolean): String {
         val age = if(latestAt == 0L) -1 else (SystemClock.elapsedRealtime() - latestAt)/1000
-        val status = when { paused -> "已暂停，未观察当前画面"; !visible -> "分享的应用当前不可见"; age < 0 -> "尚无画面证据"; age > 60 -> "画面证据已过期，距采集${age}秒，不能当作当前画面"; else -> "最近一次画面采集距今${age}秒" }
+        val status = when { paused -> "已暂停，未观察当前画面"; !visible -> "分享的应用当前不可见"; age < 0 -> "尚无画面证据"; age > 60 -> "画面证据已过期，距采集${age}秒，不能当作当前画面"; else -> "最近一次有效观察距今${age}秒" }
         return JSONObject().put("task",if(proactive) "根据已观察的新节点决定简短主动反应" else "回复最后一条真实用户发言")
             .put("capture_status",status).put("mode",mode)
+            .put("evidence_rule","dialogue 是本地 OCR，可能有错漏；同页补充不是新台词。按 time 理解先后，晚返回的 observation 可能早于此前记录。只能评论已观察剧情，不补全漏字。")
             .put("current_user_message",if(proactive) "" else app.store.lastChat(sessionId)?.takeIf { it.kind=="user" }?.body ?: "")
             .put("session_summary",app.store.session(sessionId)?.summary ?: "")
             .put("past_session_memories",app.store.memories(sessionId))
@@ -93,6 +125,8 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
         val serial = ++replySerial
         val ticket = policy.epoch
         val observedAt = latestAt
+        val version = evidenceVersion
+        val replyStarted = SystemClock.elapsedRealtime()
         if(proactive) policy.commented(SystemClock.elapsedRealtime())
         userReply = !proactive
         replyJob = scope.launch {
@@ -103,6 +137,8 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
                 val response = try { models.reply(data,proactive) } catch(e: CancellationException) { throw e }
                 catch(_: Exception) { fallback = true; models.reply(data,proactive,true) }
                 if(closed || ticket != policy.epoch || serial != replySerial) return@launch
+                CaptureDiagnostics.replyMillis=SystemClock.elapsedRealtime()-replyStarted
+                if(proactive && version!=evidenceVersion) { onState("剧情已推进，略过过时评论"); return@launch }
                 if(proactive && (!policy.active || !visible || MainActivity.visible || SystemClock.elapsedRealtime()-observedAt > 60_000)) return@launch
                 if(!proactive || response.trim() != "SILENT") {
                     record("assistant",response)
@@ -123,6 +159,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
         if(closed) return
         paused = !paused
         policy.invalidate(); visionJob?.cancel(); replyJob?.cancel(); userReply = false
+        settleJob?.cancel(); dialogue.reset()
         if(!paused) { policy.start(); lastHash=null; latestAt=0 }
         onState(if(paused) "已暂停 · 不采集、不主动说话" else "已继续，等待新画面")
     }

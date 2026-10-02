@@ -56,13 +56,28 @@ class CaptureIntegrationTest {
             }
             device.setOrientationLeft()
             device.pressHome()
-            assertTrue(device.wait(Until.hasObject(By.desc("陪看伙伴，点击聊天，拖动切换左右位置")),10000))
-            device.findObject(By.desc("陪看伙伴，点击聊天，拖动切换左右位置")).click()
+            assertTrue(device.wait(Until.hasObject(By.desc("陪看伙伴，点击聊天，自由拖动")),10000))
+            val pet=device.findObject(By.desc("陪看伙伴，点击聊天，自由拖动"))
+            val targetX=device.displayWidth/2; val targetY=device.displayHeight/3
+            pet.drag(android.graphics.Point(targetX,targetY),1000)
+            device.waitForIdle()
+            val moved=device.findObject(By.desc("陪看伙伴，点击聊天，自由拖动")).visibleBounds
+            assertTrue(kotlin.math.abs(moved.centerX()-targetX)<80)
+            assertTrue(kotlin.math.abs(moved.centerY()-targetY)<80)
+            device.findObject(By.desc("陪看伙伴，点击聊天，自由拖动")).click()
+            assertFalse(device.hasObject(By.text("结束")))
+            device.findObject(By.text("暂停")).click()
+            assertTrue(device.wait(Until.hasObject(By.text("继续")),3000))
+            device.findObject(By.text("继续")).click()
+            assertTrue(device.wait(Until.hasObject(By.text("暂停")),3000))
             val input=device.wait(Until.findObject(By.clazz("android.widget.EditText")),5000)
             assertNotNull(input); input.click(); input.text="你看到了吗"
             device.findObject(By.text("发送")).click()
             assertTrue(device.wait(Until.hasObject(By.textContains("我在这里陪你")),8000))
-            device.findObject(By.text("结束")).click()
+            device.findObject(By.text("收起")).click()
+            app.startActivity(android.content.Intent(app,MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            assertTrue(device.wait(Until.hasObject(By.text("结束本次陪看")),5000))
+            device.findObject(By.text("结束本次陪看")).click()
             withTimeout(10000) { while(CaptureService.instance!=null) delay(100) }
             assertEquals("pending",app.store.session(session)!!.state)
             assertTrue(app.store.recent(session).any { it.kind=="assistant" })

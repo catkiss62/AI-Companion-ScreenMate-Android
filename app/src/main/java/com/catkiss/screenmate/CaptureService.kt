@@ -16,6 +16,11 @@ import android.util.Base64
 import android.view.WindowManager
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import kotlin.math.roundToInt
 
 class CaptureService: Service() {
@@ -26,19 +31,22 @@ class CaptureService: Service() {
         const val PAUSE = "screenmate.pause"
     }
     private val handler = Handler(Looper.getMainLooper())
+    private val imageWorker = Executors.newSingleThreadExecutor()
+    private val processing = AtomicBoolean(false)
+    private val recognizer by lazy { TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build()) }
     private var projection: MediaProjection? = null
     private var display: VirtualDisplay? = null
     private var reader: ImageReader? = null
     private var overlay: Overlay? = null
     var engine: WatchEngine? = null; private set
-    private var ending = false
+    @Volatile private var ending = false
     private var width=0
     private var height=0
     private var lastAttempt=0L
     private val callback = object: MediaProjection.Callback() {
         override fun onStop() { end("系统已停止屏幕共享，会话已保存") }
         override fun onCapturedContentResize(w: Int,h: Int) { if(w>0 && h>0 && !ending) resize(w,h) }
-        override fun onCapturedContentVisibilityChanged(isVisible: Boolean) { engine?.visible=isVisible }
+        override fun onCapturedContentVisibilityChanged(isVisible: Boolean) { engine?.visible=isVisible; CaptureDiagnostics.visibility=isVisible }
     }
     override fun onBind(intent: Intent?) = null
     override fun onCreate() { super.onCreate(); instance=this }
@@ -57,7 +65,8 @@ class CaptureService: Service() {
             projection = getSystemService(MediaProjectionManager::class.java).getMediaProjection(Activity.RESULT_OK,consent)
             projection!!.registerCallback(callback,handler)
             val app = application as MateApp
-            val mode = intent.getStringExtra("mode") ?: "视频陪看"
+            CaptureDiagnostics.reset()
+            val mode = intent.getStringExtra("mode") ?: "无期迷途 · 剧情"
             val id = app.store.create(intent.getStringExtra("title") ?: "一起看看",mode)
             engine = WatchEngine(app,id,mode,::state,{ overlay?.message(it) },app.gateway ?: app.models)
             overlay = Overlay(this,app,engine!!).also { it.show() }
@@ -77,38 +86,96 @@ class CaptureService: Service() {
         return metrics.widthPixels to metrics.heightPixels
     }
     private fun resize(w: Int,h: Int) {
-        val scale = minOf(1.0,1280.0/maxOf(w,h))
+        val scale = minOf(1.0,(if(engine?.storyMode==true) 1920.0 else 1280.0)/maxOf(w,h))
         val nw=(w*scale).roundToInt().coerceAtLeast(2); val nh=(h*scale).roundToInt().coerceAtLeast(2)
         if(nw == width && nh == height && reader != null) return
         val replacement = ImageReader.newInstance(nw,nh,PixelFormat.RGBA_8888,2)
         replacement.setOnImageAvailableListener({ source ->
             val image = runCatching { source.acquireLatestImage() }.getOrNull() ?: return@setOnImageAvailableListener
-            image.use { frame ->
-                val e = engine ?: return@use
-                val now = SystemClock.elapsedRealtime()
-                if(now-lastAttempt < 1000) return@use
-                lastAttempt=now
-                if(!e.canCapture) return@use
+            val e=engine
+            val now=SystemClock.elapsedRealtime()
+            if(e==null || !e.canCapture || now-lastAttempt<750 || !processing.compareAndSet(false,true)) {
+                image.close(); return@setOnImageAvailableListener
+            }
+            lastAttempt=now
+            val epoch=e.captureEpoch
+            val c=(application as MateApp).config
+            val top=c.dialogueTop; val bottom=c.dialogueBottom
+            // Ownership of this acquired Image belongs to the worker until it is closed.
+            imageWorker.execute {
+                var bitmap: Bitmap?=null
                 try {
-                    val plane=frame.planes[0]
-                    val paddedWidth=plane.rowStride/plane.pixelStride
-                    val bitmap=Bitmap.createBitmap(paddedWidth,frame.height,Bitmap.Config.ARGB_8888)
-                    bitmap.copyPixelsFromBuffer(plane.buffer)
-                    val cropped=Bitmap.createBitmap(bitmap,0,0,frame.width,frame.height)
-                    val output=ByteArrayOutputStream()
-                    cropped.compress(Bitmap.CompressFormat.JPEG,78,output)
-                    if(cropped !== bitmap) cropped.recycle()
-                    bitmap.recycle()
-                    val bytes=output.toByteArray()
-                    val hash=MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-                    e.frame(Base64.encodeToString(bytes,Base64.NO_WRAP),hash)
-                } catch(_: Exception) { state("暂时未取得画面，等待下一帧") }
+                    image.use { frame ->
+                        val plane=frame.planes[0]
+                        val padded=Bitmap.createBitmap(plane.rowStride/plane.pixelStride,frame.height,Bitmap.Config.ARGB_8888)
+                        try {
+                            plane.buffer.rewind(); padded.copyPixelsFromBuffer(plane.buffer)
+                            bitmap=Bitmap.createBitmap(padded,0,0,frame.width,frame.height)
+                        } finally { if(bitmap !== padded) padded.recycle() }
+                    }
+                    processBitmap(bitmap!!,e,epoch,now,top,bottom)
+                } catch(_: Exception) {
+                    bitmap?.recycle(); finishProcessing()
+                    handler.post { if(e.acceptsCapture(epoch)) { CaptureDiagnostics.note="采集处理失败，等待下一帧"; state(CaptureDiagnostics.note) } }
+                }
             }
         },handler)
+        display?.surface=null
         display?.resize(nw,nh,resources.configuration.densityDpi)
         display?.surface=replacement.surface
         val old=reader; reader=replacement; width=nw; height=nh
-        old?.setOnImageAvailableListener(null,null); old?.close()
+        old?.setOnImageAvailableListener(null,null); if(old!=null) imageWorker.execute { old.close() }
+    }
+    private fun processBitmap(bitmap: Bitmap, e: WatchEngine, epoch: Long, now: Long, top: Int, bottom: Int) {
+        var dark=0; var total=0
+        for(y in 0 until bitmap.height step maxOf(1,bitmap.height/40)) for(x in 0 until bitmap.width step maxOf(1,bitmap.width/40)) {
+            val pixel=bitmap.getPixel(x,y); total++
+            if(android.graphics.Color.red(pixel)<12 && android.graphics.Color.green(pixel)<12 && android.graphics.Color.blue(pixel)<12) dark++
+        }
+        val scale=minOf(1.0,1280.0/maxOf(bitmap.width,bitmap.height))
+        val small=if(scale<1) Bitmap.createScaledBitmap(bitmap,(bitmap.width*scale).roundToInt(),(bitmap.height*scale).roundToInt(),true) else bitmap
+        val out=ByteArrayOutputStream(); small.compress(Bitmap.CompressFormat.JPEG,78,out)
+        val bytes=out.toByteArray()
+        val diagnostic=CaptureDiagnostics.Frame(bytes,System.currentTimeMillis()-(SystemClock.elapsedRealtime()-now),small.width,small.height,dark*100/total)
+        if(small !== bitmap) small.recycle()
+        val hash=MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+        val base64=Base64.encodeToString(bytes,Base64.NO_WRAP)
+        handler.post {
+            if(e.acceptsCapture(epoch)) {
+                CaptureDiagnostics.latest=diagnostic
+                CaptureDiagnostics.note=if(diagnostic.darkPercent>=98) "画面接近全黑，请查看截图；可能是转场或采集异常" else "已采集新画面"
+                // Dark scenes are reported, not silently removed from evidence.
+                e.frame(base64,hash,now,diagnostic)
+            }
+        }
+        if(!e.storyMode) { bitmap.recycle(); finishProcessing(); return }
+        val y=(bitmap.height*top/100).coerceIn(0,bitmap.height-1)
+        val end=(bitmap.height*bottom/100).coerceIn(y+1,bitmap.height)
+        val crop=Bitmap.createBitmap(bitmap,0,y,bitmap.width,end-y)
+        val began=SystemClock.elapsedRealtime()
+        // Keep both bitmaps alive until ML Kit has finished, including shutdown/pause.
+        try {
+            recognizer.process(InputImage.fromBitmap(crop,0)).addOnCompleteListener(imageWorker) { task ->
+                val text=if(task.isSuccessful) task.result.textBlocks.sortedWith(compareBy({ it.boundingBox?.top ?: 0 },{ it.boundingBox?.left ?: 0 }))
+                    .joinToString("\n") { it.text } else ""
+                if(crop !== bitmap) crop.recycle()
+                bitmap.recycle(); finishProcessing()
+                handler.post {
+                    if(e.acceptsCapture(epoch)) {
+                        CaptureDiagnostics.ocrMillis=SystemClock.elapsedRealtime()-began
+                        if(task.isSuccessful) e.localText(text,now,epoch)
+                        else { CaptureDiagnostics.note="本地识字失败，云端仍可补充画面"; state(CaptureDiagnostics.note) }
+                    }
+                }
+            }
+        } catch(error: Exception) {
+            if(crop !== bitmap) crop.recycle()
+            throw error
+        }
+    }
+    private fun finishProcessing() {
+        processing.set(false)
+        handler.post { if(ending) { recognizer.close(); imageWorker.shutdown() } }
     }
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
@@ -134,8 +201,11 @@ class CaptureService: Service() {
         engine?.stop(); engine=null
         overlay?.destroy(); overlay=null
         reader?.setOnImageAvailableListener(null,null)
-        display?.release(); display=null; reader?.close(); reader=null
+        display?.release(); display=null
+        val oldReader=reader; reader=null
+        if(oldReader!=null) imageWorker.execute { oldReader.close() }
         projection?.unregisterCallback(callback); projection?.stop(); projection=null
+        if(!processing.get()) { recognizer.close(); imageWorker.shutdown() }
         stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
     }
     override fun onDestroy() { end(); instance=null; super.onDestroy() }

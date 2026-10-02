@@ -47,10 +47,10 @@ class Overlay(private val service: CaptureService, private val app: MateApp, pri
                     }; true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if(moved) { app.config.left=petParams.x+petParams.width/2<screen().first/2; reposition() }
+                    if(moved) { savePosition(); pet.invalidate() }
                     else { pet.performClick(); if(panel==null) openPanel() else closePanel() }; true
                 }
-                MotionEvent.ACTION_CANCEL -> { reposition(); true }
+                MotionEvent.ACTION_CANCEL -> { if(moved) savePosition(); pet.invalidate(); true }
                 else -> false
             }
         }
@@ -61,10 +61,22 @@ class Overlay(private val service: CaptureService, private val app: MateApp, pri
         @Suppress("DEPRECATION") wm.defaultDisplay.getRealMetrics(m)
         return m.widthPixels to m.heightPixels
     }
+    private fun savePosition() {
+        val size=screen()
+        app.config.left=petParams.x+petParams.width/2<size.first/2
+        app.config.savePetPosition(size.first>size.second,
+            petParams.x.toFloat()/(size.first-petParams.width).coerceAtLeast(1),
+            petParams.y.toFloat()/(size.second-petParams.height).coerceAtLeast(1))
+    }
     fun reposition() {
         val size=screen()
-        petParams.x=if(app.config.left) service.dp(12) else (size.first-petParams.width-service.dp(12)).coerceAtLeast(0)
-        petParams.y=(size.second-petParams.height-service.dp(54)).coerceAtLeast(0)
+        val maxX=(size.first-petParams.width).coerceAtLeast(0)
+        val maxY=(size.second-petParams.height).coerceAtLeast(0)
+        val saved=app.config.petPosition(size.first>size.second)
+        petParams.x=saved?.let { (it.first*maxX).toInt() } ?: if(app.config.left) service.dp(12) else maxX-service.dp(12)
+        petParams.y=saved?.let { (it.second*maxY).toInt() } ?: maxY-service.dp(54)
+        petParams.x=petParams.x.coerceIn(0,maxX); petParams.y=petParams.y.coerceIn(0,maxY)
+        app.config.left=petParams.x+petParams.width/2<size.first/2
         runCatching { wm.updateViewLayout(pet,petParams) }
         pet.invalidate(); closePanel(); hideBubble.run()
     }
@@ -110,10 +122,9 @@ class Overlay(private val service: CaptureService, private val app: MateApp, pri
         root.addView(input,LinearLayout.LayoutParams(-1,service.dp(70)))
         val row=LinearLayout(service)
         fun action(label: String, run: ()->Unit) = Button(service).apply { text=label; textSize=12f; setPadding(0,0,0,0); setOnClickListener { run() } }.also { row.addView(it,LinearLayout.LayoutParams(0,service.dp(48),1f)) }
-        action("发送") { if(engine.send(input.text.toString().trim())) { input.text.clear(); refresh() } else Toast.makeText(service,"请等待当前回复，或先输入文字",Toast.LENGTH_SHORT).show() }
-        action("重试") { engine.retryReply() }
         pausedButton=action(if(engine.paused) "继续" else "暂停") { engine.pause() }
-        action("结束") { service.end() }
+        action("重试") { engine.retryReply() }
+        action("发送") { if(engine.send(input.text.toString().trim())) { input.text.clear(); refresh() } else Toast.makeText(service,"请等待当前回复，或先输入文字",Toast.LENGTH_SHORT).show() }
         root.addView(row)
         val size=screen()
         val p=params(minOf(service.dp(420),size.first-service.dp(24)),minOf(service.dp(480),size.second-service.dp(100)))
@@ -143,7 +154,7 @@ class Overlay(private val service: CaptureService, private val app: MateApp, pri
 class MascotView(context: Context, private val app: MateApp): View(context) {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
     private val image=File(context.filesDir,"mascot.png").takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path) }
-    init { contentDescription="陪看伙伴，点击聊天，拖动切换左右位置" }
+    init { contentDescription="陪看伙伴，点击聊天，自由拖动" }
     override fun performClick(): Boolean { super.performClick(); return true }
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)

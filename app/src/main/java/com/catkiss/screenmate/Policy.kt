@@ -22,6 +22,8 @@ class WatchPolicy {
     fun mayComment(now: Long, observed: Long, interesting: Boolean, interval: Long): Boolean =
         active && interesting && now - observed in 0..60_000 && now - lastUser >= 45_000 && now - lastComment >= interval
     fun mayObserve(now: Long) = active && now >= nextVisionAt
+    fun requested(now: Long, interval: Long) { nextVisionAt=now+interval }
+    fun succeeded() { failures=0 }
     fun observed(now: Long, interval: Long) { failures = 0; nextVisionAt = now + interval }
     fun failed(now: Long, retrySeconds: Long? = null) {
         failures = min(failures + 1, 6)

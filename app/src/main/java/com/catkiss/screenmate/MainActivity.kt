@@ -66,15 +66,15 @@ class MainActivity: Activity() {
     }
     private fun message(text: String) { Toast.makeText(this,text,Toast.LENGTH_LONG).show() }
     private fun home() {
-        screen("一起看看", "ScreenMate · 0.1.0 测试版\n给剧情留一点陪伴，也给屏幕留一点安静。")
+        screen("一起看看", "ScreenMate · 0.1.1 剧情测试版\n给剧情留一点陪伴，也给屏幕留一点安静。")
         statusView=label(CaptureService.status)
         if(CaptureService.instance?.engine!=null) {
             button("暂停 / 继续") { CaptureService.instance?.engine?.pause() }
             button("结束本次陪看") { CaptureService.instance?.end(); home() }
-            label("点击屏幕角落的伙伴打开聊天；拖动后会停靠左下或右下。")
+            label("点击屏幕角落的伙伴打开聊天；可自由拖动，横竖屏分别记住位置。")
         } else {
             val title=field("本次想看什么", "")
-            val mode=Spinner(this).apply { adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,listOf("B站 / 浏览器视频","无期迷途 · 剧情")) }
+            val mode=Spinner(this).apply { adapter=ArrayAdapter(this@MainActivity,android.R.layout.simple_spinner_dropdown_item,listOf("无期迷途 · 剧情","B站 / 浏览器视频（实验）")) }
             body.addView(mode,LinearLayout.LayoutParams(-1,dp(52)))
             button("开始陪看") {
                 pendingTitle=title.text.toString().trim().ifBlank { "一起看看 · ${SimpleDateFormat("MM-dd HH:mm",Locale.CHINA).format(Date())}" }
@@ -83,10 +83,11 @@ class MainActivity: Activity() {
             }
         }
         button("接口与陪伴设置") { settings() }
+        button("识屏诊断与截图预览") { diagnostics() }
         button("会话与记忆") { sessions() }
         label("第一次使用",20f)
-        label("1. 填写官方 Gemini 识图、第二通道回复和 DeepSeek 整理接口。\n2. 允许悬浮窗，点击开始并选择要分享的应用。\n3. 切回 B站、浏览器或无期迷途，她会偶尔用文字气泡回应。\n4. 看完点击结束，会话记录会留在这里。")
-        label("本版不播放声音、不录音。带字幕的视频和文字剧情更适合测试；受保护的视频可能是黑屏。HyperOS 若清理后台，可在系统应用设置中允许后台运行，并将耗电策略调为无限制。",14f)
+        label("1. 填写官方 Gemini 识图、第二通道回复和 DeepSeek 整理接口。\n2. 允许悬浮窗，点击开始并选择要分享的应用。\n3. 切回无期迷途；正常阅读并推进对白，她会偶尔用文字气泡回应。\n4. 看完点击结束，会话记录会留在这里。")
+        label("本版不播放声音、不录音。本轮优先测试无期迷途文字剧情。字幕电影暂不保证连续理解。HyperOS 若清理后台，可在系统应用设置中允许后台运行，并将耗电策略调为无限制。",14f)
     }
     private fun startWatch() {
         app.config.ready()?.let { message(it); settings(); return }
@@ -97,7 +98,7 @@ class MainActivity: Activity() {
         if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),10)
         AlertDialog.Builder(this).setTitle("开始本次屏幕陪看")
-            .setMessage("分享画面会按设置的间隔发送到官方 Gemini；识别文字和对话会发送到第二通道，DeepSeek 用于整理和失败兜底。截图不写入相册或会话库。\n\n建议只分享要看的应用。若分享整个屏幕，请先避开私密内容；暂停后不再采集，结束会撤销本次共享。模型用量和免费额度以各服务商账户为准。")
+            .setMessage("剧情模式约每 0.75 秒尝试本地识字，文字稳定后记录；画面按云端间隔补充发送到官方 Gemini。识别文字和对话会发送到第二通道，DeepSeek 用于整理和失败兜底。截图不写入相册或会话库。\n\n建议只分享要看的应用。若分享整个屏幕，请先避开私密内容；暂停后不再采集，结束会撤销本次共享。模型用量和免费额度以各服务商账户为准。")
             .setNegativeButton("取消",null).setPositiveButton("选择分享画面") { _,_ ->
                 @Suppress("DEPRECATION") startActivityForResult(getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent(),100)
             }.show()
@@ -129,7 +130,9 @@ class MainActivity: Activity() {
         val deepKey=field("DeepSeek Key",c.secret("deep"),true)
         val deepModel=field("DeepSeek 模型",c.deepModel)
         val persona=field("她是谁，你们是什么关系",c.persona,multi=true)
-        val interval=field("识图最短间隔（10–120 秒，默认 15）",c.intervalSeconds.toString())
+        val interval=field("云端画面补充间隔（10–120 秒；不影响本地对白采集）",c.intervalSeconds.toString())
+        val roiTop=field("对白区域上边界（屏幕高度百分比，默认 55；居中文字可设 0）",c.dialogueTop.toString())
+        val roiBottom=field("对白区域下边界（百分比，默认 98）",c.dialogueBottom.toString())
         val comments=field("主动评论最短间隔（30–600 秒，默认 90）",c.commentSeconds.toString())
         val cap=field("本机每日识图请求上限（不是 Google 免费额度）",c.dailyCap.toString())
         label("本机计数按太平洋日期记录。今日：识图 ${app.store.usage("vision")}、第二通道 ${app.store.usage("relay")}、整理 ${app.store.usage("summary")}、兜底 ${app.store.usage("fallback")} 次。\n有变化且值得说时才主动评论；间隔是最短等待时间，不是定时强行说话。",14f)
@@ -142,7 +145,10 @@ class MainActivity: Activity() {
             if(vm.isNotBlank() && !Endpoints.model(vm)) { message("官方模型名格式不正确，不要包含 models/ 前缀"); return false }
             val i=interval.text.toString().toIntOrNull(); val co=comments.text.toString().toIntOrNull(); val ca=cap.text.toString().toIntOrNull()
             if(i==null||i !in 10..120||co==null||co !in 30..600||ca==null||ca !in 1..5000) { message("请检查间隔和上限范围"); return false }
+            val rt=roiTop.text.toString().toIntOrNull(); val rb=roiBottom.text.toString().toIntOrNull()
+            if(rt==null || rb==null || rt !in 0..90 || rb !in 10..100 || rb-rt<10) { message("对白区域至少覆盖 10% 高度，上边界须小于下边界"); return false }
             return runCatching {
+                c.dialogueTop=rt; c.dialogueBottom=rb
                 c.setSecret("vision",visionKey.text.toString()); c.setSecret("relay",relayKey.text.toString()); c.setSecret("deep",deepKey.text.toString())
                 c.visionModel=vm; c.relayUrl=ru; c.relayModel=relayModel.text.toString().trim()
                 c.deepUrl=du; c.deepModel=deepModel.text.toString().trim(); c.persona=persona.text.toString()
@@ -156,10 +162,30 @@ class MainActivity: Activity() {
                 @Suppress("DEPRECATION") startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).setType("image/*").addCategory(Intent.CATEGORY_OPENABLE),101)
             }
         }
+        button("打开参考项目原人物素材") {
+            startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/blob/main/assets/DSniang1.png")))
+        }
         button("恢复默认小鲸鱼") {
             if(CaptureService.instance!=null) message("请先结束当前陪看") else { File(filesDir,"mascot.png").delete(); message("已恢复，下次开始生效") }
         }
         label("参考项目中的人物图需要你在本机选择导入。本仓库只包含原创代码绘制的小鲸鱼占位，不包含该人物美术资产。",14f)
+        button("返回") { home() }
+    }
+    private fun diagnostics() {
+        screen("识屏诊断","这里显示实际采集及送给官方 Gemini 的图片。仅保留在内存，打开本页时停止取得新画面；切回游戏继续。黑色区域比例只是线索，不代表已判定播放保护。")
+        val d=CaptureDiagnostics
+        label("${d.note}\n分享目标可见：${d.visibility}\n稳定对白：${d.dialogueCount} 段\n最近耗时：本地识字 ${d.ocrMillis} ms / 云端识图 ${d.visionMillis} ms / 回复 ${d.replyMillis} ms")
+        fun preview(title: String, frame: CaptureDiagnostics.Frame?) {
+            label(title,20f)
+            if(frame==null) { label("暂无图片"); return }
+            label("${SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(Date(frame.capturedAt))} · ${frame.width}×${frame.height} · 暗色采样 ${frame.darkPercent}%",14f)
+            val bitmap=BitmapFactory.decodeByteArray(frame.jpeg,0,frame.jpeg.size)
+            body.addView(ImageView(this).apply { setImageBitmap(bitmap); adjustViewBounds=true; contentDescription=title },LinearLayout.LayoutParams(-1,-2))
+        }
+        preview("最近采集的整张截图",d.latest)
+        preview("最近实际发送给 Gemini 的截图",d.sent)
+        label("本地识字区域：高度 ${app.config.dialogueTop}%–${app.config.dialogueBottom}%（设置里可调整）\n最近 OCR 原文：\n${d.ocrText.ifBlank { "尚无可读文字" }}")
+        button("刷新诊断") { diagnostics() }
         button("返回") { home() }
     }
     private fun sessions() {
@@ -188,7 +214,7 @@ class MainActivity: Activity() {
         }
         label("最近记录（完整记录可导出）",20f)
         app.store.recent(id,100).forEach { entry ->
-            val type=when(entry.kind) { "user" -> "你"; "assistant" -> "她"; else -> "画面观察" }
+            val type=when(entry.kind) { "user" -> "你"; "assistant" -> "她"; "dialogue" -> "本地对白"; else -> "画面观察" }
             label("${SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(Date(entry.time))} · $type\n${entry.body}",14f)
         }
         button("返回会话列表") { sessions() }

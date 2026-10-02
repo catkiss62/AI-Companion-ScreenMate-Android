@@ -28,10 +28,10 @@ class Store(context: Context, name: String = "screenmate.db") : SQLiteOpenHelper
         buildList { while(c.moveToNext()) add(Session(c.getLong(0),c.getString(1),c.getString(2),c.getString(3),c.getString(4),c.getLong(5),c.getLong(6))) }
     }
     fun session(id: Long) = sessions().firstOrNull { it.id == id }
-    @Synchronized fun add(id: Long, kind: String, body: String): Long {
+    @Synchronized fun add(id: Long, kind: String, body: String, capturedAt: Long = System.currentTimeMillis()): Long {
         if (session(id) == null) return -1
         return writableDatabase.insertOrThrow("entries", null, ContentValues().apply {
-            put("session", id); put("kind", kind); put("body", body.take(16000)); put("time", System.currentTimeMillis())
+            put("session", id); put("kind", kind); put("body", body.take(16000)); put("time", capturedAt)
         })
     }
     fun entries(id: Long, after: Long = 0, limit: Int = 50): List<Entry> = readableDatabase.rawQuery(
