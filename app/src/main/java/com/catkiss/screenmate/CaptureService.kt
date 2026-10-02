@@ -59,7 +59,7 @@ class CaptureService: Service() {
             val app = application as MateApp
             val mode = intent.getStringExtra("mode") ?: "视频陪看"
             val id = app.store.create(intent.getStringExtra("title") ?: "一起看看",mode)
-            engine = WatchEngine(app,id,mode,::state,{ overlay?.message(it) })
+            engine = WatchEngine(app,id,mode,::state,{ overlay?.message(it) },app.gateway ?: app.models)
             overlay = Overlay(this,app,engine!!).also { it.show() }
             val size = screenSize()
             resize(size.first,size.second)
@@ -86,8 +86,9 @@ class CaptureService: Service() {
             image.use { frame ->
                 val e = engine ?: return@use
                 val now = SystemClock.elapsedRealtime()
-                if(!e.canCapture || now-lastAttempt < 1000) return@use
+                if(now-lastAttempt < 1000) return@use
                 lastAttempt=now
+                if(!e.canCapture) return@use
                 try {
                     val plane=frame.planes[0]
                     val paddedWidth=plane.rowStride/plane.pixelStride

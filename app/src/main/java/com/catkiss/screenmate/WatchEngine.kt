@@ -29,7 +29,9 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
     fun frame(base64: String, hash: String) {
         if(!canCapture) return
         val now = SystemClock.elapsedRealtime()
-        if(hash == lastHash && now - lastFrameAt < 60_000) return
+        if(hash == lastHash && now - lastFrameAt < 60_000) {
+            policy.observed(now,app.config.intervalSeconds * 1000L); return
+        }
         lastHash = hash; lastFrameAt = now
         val ticket = policy.epoch
         onState("正在看画面…")

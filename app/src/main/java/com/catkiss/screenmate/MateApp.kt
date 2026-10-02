@@ -10,6 +10,8 @@ class MateApp : Application() {
     lateinit var config: Config; private set
     lateinit var store: Store; private set
     lateinit var models: Models; private set
+    var gateway: ModelGateway? = null
+        internal set
     override fun onCreate() {
         super.onCreate()
         config = Config(this); store = Store(this); models = Models(config,store)
