@@ -59,7 +59,7 @@ class CaptureService: Service() {
             val app = application as MateApp
             val mode = intent.getStringExtra("mode") ?: "视频陪看"
             val id = app.store.create(intent.getStringExtra("title") ?: "一起看看",mode)
-            engine = WatchEngine(app,id,mode,::state) { overlay?.message(it) }
+            engine = WatchEngine(app,id,mode,::state,{ overlay?.message(it) })
             overlay = Overlay(this,app,engine!!).also { it.show() }
             val size = screenSize()
             resize(size.first,size.second)

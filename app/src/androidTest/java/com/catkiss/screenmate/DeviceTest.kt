@@ -90,4 +90,53 @@ class DeviceTest {
         assertEquals(listOf(false,true),calls); assertEquals(listOf("user","assistant"),app.store.recent(id).map { it.kind })
         withContext(Dispatchers.Main) { e.stop() }; app.deleteSession(id)
     }
+    @Test fun userPreemptsProactiveReplyWithoutOldCleanupUnlockingInput() = runBlocking {
+        val id=app.store.create("test priority","video")
+        val started=CompletableDeferred<Unit>(); val finishUser=CompletableDeferred<Unit>(); val visible=CompletableDeferred<String>()
+        val shown=mutableListOf<String>()
+        val fake=object: ModelGateway {
+            override suspend fun observe(base64: String,mode: String)=Observation("角色告别","再见","离开","",true)
+            override suspend fun reply(context: String,proactive: Boolean,fallback: Boolean): String {
+                if(proactive) {
+                    started.complete(Unit)
+                    try { awaitCancellation() } finally { withContext(NonCancellable) { delay(50) } }
+                }
+                finishUser.await(); return "先听你说。"
+            }
+        }
+        lateinit var e: WatchEngine
+        withContext(Dispatchers.Main) {
+            MainActivity.visible=false
+            e=WatchEngine(app,id,"video",{}, { shown.add(it); visible.complete(it) },fake)
+            e.frame("fake image","unique frame")
+        }
+        withTimeout(5000) { started.await() }
+        withContext(Dispatchers.Main) { assertTrue(e.send("我有话说")) }
+        delay(100)
+        withContext(Dispatchers.Main) { assertTrue(e.busy); assertFalse(e.send("不要排队第二次")) }
+        finishUser.complete(Unit)
+        assertEquals("先听你说。",withTimeout(5000) { visible.await() })
+        assertEquals(listOf("先听你说。"),shown)
+        withContext(Dispatchers.Main) { e.stop() }; app.deleteSession(id)
+    }
+    @Test fun lateVisionAfterPauseCannotWriteEvidence() = runBlocking {
+        val id=app.store.create("test late vision","video")
+        val started=CompletableDeferred<Unit>(); val release=CompletableDeferred<Unit>()
+        val fake=object: ModelGateway {
+            override suspend fun observe(base64: String,mode: String): Observation {
+                started.complete(Unit)
+                withContext(NonCancellable) { release.await() }
+                return Observation("迟到内容","迟到台词","","",true)
+            }
+            override suspend fun reply(context: String,proactive: Boolean,fallback: Boolean): String = error("No reply expected")
+        }
+        lateinit var e: WatchEngine
+        withContext(Dispatchers.Main) { MainActivity.visible=false; e=WatchEngine(app,id,"video",{}, {},fake); e.frame("fake","late") }
+        withTimeout(5000) { started.await() }
+        withContext(Dispatchers.Main) { e.pause() }
+        release.complete(Unit); delay(100)
+        assertTrue(app.store.recent(id).isEmpty())
+        withContext(Dispatchers.Main) { e.stop() }; app.deleteSession(id)
+    }
+
 }

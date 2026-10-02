@@ -55,8 +55,8 @@ class MainActivity: Activity() {
     private fun button(text: String, action: ()->Unit): Button = Button(this).apply {
         this.text=text; isAllCaps=false; setOnClickListener { action() }
     }.also { body.addView(it,LinearLayout.LayoutParams(-1,dp(56)).apply { topMargin=dp(8) }) }
-    private fun field(label: String, value: String, secret: Boolean=false, multi: Boolean=false): EditText {
-        label(label,14f)
+    private fun field(caption: String, value: String, secret: Boolean=false, multi: Boolean=false): EditText {
+        label(caption,14f)
         return EditText(this).apply {
             setText(value); textSize=16f; setPadding(dp(12),dp(10),dp(12),dp(10)); background=rounded(Color.WHITE)
             inputType=when { secret -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD; multi -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE; else -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI }
