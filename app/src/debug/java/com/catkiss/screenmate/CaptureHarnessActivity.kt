@@ -12,7 +12,7 @@ import android.widget.TextView
 class CaptureHarnessActivity: Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(TextView(this).apply { text="ScreenMate capture integration test"; textSize=28f })
+        setContentView(TextView(this).apply { text="局长：我们一起回去吧。"; textSize=28f; gravity=android.view.Gravity.BOTTOM; setPadding(30,30,30,90) })
         if(savedInstanceState==null) {
             val manager=getSystemService(MediaProjectionManager::class.java)
             val request=if(Build.VERSION.SDK_INT>=34) manager.createScreenCaptureIntent(MediaProjectionConfig.createConfigForDefaultDisplay()) else manager.createScreenCaptureIntent()
@@ -23,7 +23,7 @@ class CaptureHarnessActivity: Activity() {
     override fun onActivityResult(requestCode: Int,resultCode: Int,data: Intent?) {
         super.onActivityResult(requestCode,resultCode,data)
         if(requestCode==1 && resultCode==RESULT_OK && data!=null) {
-            startForegroundService(Intent(this,CaptureService::class.java).putExtra("consent",data).putExtra("title","Capture integration test").putExtra("mode","video"))
+            startForegroundService(Intent(this,CaptureService::class.java).putExtra("consent",data).putExtra("title","Capture integration test").putExtra("mode","无期迷途 · 剧情"))
         }
     }
 }

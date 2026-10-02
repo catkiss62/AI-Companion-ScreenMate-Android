@@ -49,6 +49,14 @@ class CaptureIntegrationTest {
             }
             start!!.click()
             withTimeout(20000) { seen.await() }
+            withTimeout(30000) {
+                while(!withContext(Dispatchers.Main) { CaptureDiagnostics.ocrText.contains("局长") && CaptureDiagnostics.dialogueCount>0 }) delay(200)
+            }
+            withContext(Dispatchers.Main) {
+                assertNotNull(CaptureDiagnostics.latest)
+                assertNotNull(CaptureDiagnostics.sent)
+                assertTrue(CaptureDiagnostics.ocrText.contains("一起"))
+            }
             withContext(Dispatchers.Main) {
                 val service=CaptureService.instance!!; session=service.engine!!.sessionId
                 assertFalse(service.engine!!.paused); service.engine!!.pause(); assertFalse(service.engine!!.canCapture)
