@@ -57,6 +57,14 @@ class DeviceTest {
         ActivityScenario.launch<MainActivity>(Intent(app,MainActivity::class.java)).use { scenario ->
             scenario.onActivity { assertNotNull(it.findViewById<android.view.View>(android.R.id.content)) }
             scenario.recreate()
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            scenario.onActivity { activity ->
+                val view=activity.window.decorView
+                val bitmap=android.graphics.Bitmap.createBitmap(view.width,view.height,android.graphics.Bitmap.Config.ARGB_8888)
+                view.draw(android.graphics.Canvas(bitmap))
+                java.io.File(activity.getExternalFilesDir(null),"qa-home.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it) }
+                bitmap.recycle()
+            }
         }
     }
     @Test fun stoppingEngineCancelsPendingReplyAndPreservesUserRecord() = runBlocking {

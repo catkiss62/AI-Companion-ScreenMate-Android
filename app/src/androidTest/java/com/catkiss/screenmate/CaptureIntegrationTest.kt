@@ -41,9 +41,13 @@ class CaptureIntegrationTest {
             device.executeShellCommand("appops set ${app.packageName} SYSTEM_ALERT_WINDOW allow")
             withContext(Dispatchers.Main) { app.gateway=fake; app.config.setSecret("deep",""); MainActivity.visible=false }
             scenario=ActivityScenario.launch(CaptureHarnessActivity::class.java)
-            val start=device.wait(Until.findObject(By.text(Pattern.compile("Start now|Start sharing|Share screen",Pattern.CASE_INSENSITIVE))),15000)
-            assertNotNull("System screen-sharing consent should be visible",start)
-            start.click()
+            val start=device.wait(Until.findObject(By.res("android:id/button1")),15000)
+                ?: device.findObject(By.text(Pattern.compile("Start|Start now|Start sharing|Start recording|Share|Share screen|Continue",Pattern.CASE_INSENSITIVE)))
+            if(start==null) {
+                val hierarchy=java.io.ByteArrayOutputStream(); device.dumpWindowHierarchy(hierarchy)
+                fail("System screen-sharing consent not found: " + hierarchy.toString("UTF-8"))
+            }
+            start!!.click()
             withTimeout(20000) { seen.await() }
             withContext(Dispatchers.Main) {
                 val service=CaptureService.instance!!; session=service.engine!!.sessionId
@@ -67,7 +71,7 @@ class CaptureIntegrationTest {
             withContext(Dispatchers.Main) { CaptureService.instance?.end(); app.gateway=null }
             if(session!=0L) app.deleteSession(session)
             app.config.setSecret("deep",oldKey)
-            device.unfreezeRotation(); scenario?.close()
+            device.setOrientationNatural(); device.unfreezeRotation(); scenario?.close()
         }
     }
 }

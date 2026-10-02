@@ -24,10 +24,12 @@
 ## 构建与验收状态
 
 - 版本：0.1.0 / versionCode 1。
-- 第一轮源码已实现，正在进行编译、lint、单元测试与 Android 35 模拟器测试；尚不能宣布 APK 通过。
+- 当前应用编译、12 项单元测试、Android lint 已通过；Android 35 平板模拟器测试进行中，尚不能宣布 APK 全部通过。
+- CI 已修正：SDK 安装不再请求已移除的 tools 包；CaptureService 的模型注入回调参数绑定；API 26 主题不直接引用 API 27 导航栏属性。
+- 已补入真实屏幕共享集成测试：系统授权 → 前台服务 → 截图 → 浮窗输入/回复 → 旋转 → 结束。模型使用测试替身，不消耗真实 API。
 - 本环境只有 JDK 17，无 Android SDK/Gradle，完整构建由 GitHub Actions 执行。
 - CI 必须全部通过后才创建未发布 APK Draft；测试签名单独保存在 Draft，禁止正式发布。
-- 测试覆盖计划：生命周期迟到结果、用户优先、限流退避、接口格式、thought 过滤、Key 加密、SQLite 删除/游标/崩溃恢复、真实 WatchEngine 取消和兜底、主界面重建。
+- 已编写的测试范围：生命周期迟到结果、用户优先、限流退避、接口格式、thought 过滤、Key 加密、SQLite 删除/游标/崩溃恢复、真实 WatchEngine 取消和兜底、主界面重建。
 
 ## 实机仍需验证
 
