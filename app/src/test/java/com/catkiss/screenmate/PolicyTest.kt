@@ -68,6 +68,7 @@ class PolicyTest {
         val relay=Wire.chatBody("[test]gemini-3.7-flash","role","data")
         assertEquals("low",relay.getJSONObject("extra_body").getJSONObject("google").getJSONObject("thinking_config").getString("thinking_level"))
         assertFalse(Wire.chatBody("deepseek-chat","role","data").has("extra_body"))
+        assertEquals("disabled",Wire.chatBody("deepseek-flash","role","data").getJSONObject("thinking").getString("type"))
     }
     @Test fun truncatedSummaryIsNotCommittedAsACompleteMemory() {
         try { Wire.chatText(JSONObject("""{"choices":[{"finish_reason":"length","message":{"content":"half a memory"}}]}""")); fail() }

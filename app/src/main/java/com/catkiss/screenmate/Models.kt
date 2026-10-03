@@ -52,6 +52,7 @@ object Wire {
         .put("messages",JSONArray().put(JSONObject().put("role","system").put("content",system))
             .put(JSONObject().put("role","user").put("content",data)))
         .put("stream",false).put("max_tokens",maxTokens).apply {
+            if(model=="deepseek-flash" || model.startsWith("deepseek-v4")) put("thinking",JSONObject().put("type","disabled"))
             // Same OpenAI-compatible Gemini extension used by the phone companion.
             if(model.lowercase().contains("gemini-3")) put("extra_body",JSONObject().put("google",JSONObject()
                 .put("thinking_config",JSONObject().put("thinking_level","low").put("include_thoughts",false))))

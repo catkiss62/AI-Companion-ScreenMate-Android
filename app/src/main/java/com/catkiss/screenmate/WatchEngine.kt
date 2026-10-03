@@ -24,18 +24,19 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
     val videoMode = mode.contains("连续视频")
     private var videoReplyFailure: Exception?=null
     val videoPipeline = if(videoMode) VideoPipeline(app,models,
-        { kind,text,time -> app.store.add(sessionId,kind,text,time) },
-        { clip -> videoReaction(clip) },onState) else null
-    private suspend fun videoReaction(clip: VideoClip) {
-        latestAt=SystemClock.elapsedRealtime()-(System.currentTimeMillis()-clip.end).coerceAtLeast(0)
-        evidenceVersion++
+        { kind,text,time ->
+            app.store.add(sessionId,kind,text,time)
+            if(kind=="video_story") { latestAt=maxOf(latestAt,SystemClock.elapsedRealtime()-(System.currentTimeMillis()-time).coerceAtLeast(0)); evidenceVersion++ }
+        },
+        { clip,story -> videoReaction(clip,story) },onState) else null
+    private suspend fun videoReaction(clip: VideoClip,story: String) {
         if(!app.config.replyEveryVideo) { maybeComment(true); return }
         while(!closed && !paused && app.config.replyEveryVideo) {
             replyJob?.join()
             currentCoroutineContext().ensureActive()
-            if(closed || paused) return
+            if(closed || paused || !app.config.replyEveryVideo) return
             videoReplyFailure=null
-            val task=reply(true,clip,true)
+            val task=reply(true,clip,true,story)
             task.join()
             currentCoroutineContext().ensureActive()
             if(task.isCancelled) continue // A user turn gets priority; this test reaction resumes after it.
@@ -127,26 +128,26 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
         records++
         if(records % 30 == 0) app.archive(sessionId)
     }
-    private fun context(proactive: Boolean, clip: VideoClip?=null, forced: Boolean=false): String {
+    private fun context(proactive: Boolean, clip: VideoClip?=null, forced: Boolean=false, targetStory: String?=null): String {
         val age = if(latestAt == 0L) -1 else (SystemClock.elapsedRealtime() - latestAt)/1000
         val status = when { paused -> "已暂停，未观察当前画面"; !visible -> "分享的应用当前不可见"; age < 0 -> "尚无画面证据"; age > 60 -> "画面证据已过期，距采集${age}秒，不能当作当前画面"; else -> "最近一次有效观察距今${age}秒" }
         return JSONObject().put("task",if(proactive) "根据已观察的新节点决定简短主动反应" else "回复最后一条真实用户发言")
             .put("capture_status",status).put("mode",mode)
             .put("video_test",forced).put("target_video",clip?.label() ?: "")
-            .put("continuous_video_story",videoPipeline?.story ?: "")
+            .put("continuous_video_story",targetStory ?: videoPipeline?.story ?: "")
             .put("evidence_rule","dialogue 是本地 OCR，可能有错漏；同页补充不是新台词。按 time 理解先后，晚返回的 observation 可能早于此前记录。只能评论已观察剧情，不补全漏字。")
             .put("current_user_message",if(proactive) "" else app.store.lastChat(sessionId)?.takeIf { it.kind=="user" }?.body ?: "")
-            .put("session_summary",app.store.session(sessionId)?.summary ?: "")
+            .put("session_summary",if(forced) "" else app.store.session(sessionId)?.summary ?: "")
             .put("past_session_memories",app.store.memories(sessionId))
             .put("recent_records",JSONArray().apply {
                 var budget=24000
-                val rows=app.store.recent(sessionId).asReversed().mapNotNull { entry ->
+                val rows=app.store.recent(sessionId).filter { entry -> !forced || clip==null || !entry.kind.startsWith("video_") || entry.time<=clip.end }.asReversed().mapNotNull { entry ->
                     if(budget<=0) null else { val text=entry.body.take(minOf(6000,budget)); budget-=text.length; entry.copy(body=text) }
                 }.asReversed()
                 rows.forEach { put(JSONObject().put("kind",it.kind).put("time",it.time).put("text",it.body)) }
             }).toString()
     }
-    private fun reply(proactive: Boolean, clip: VideoClip?=null, forced: Boolean=false): Job {
+    private fun reply(proactive: Boolean, clip: VideoClip?=null, forced: Boolean=false, targetStory: String?=null): Job {
         val serial = ++replySerial
         val ticket = policy.epoch
         val observedAt = latestAt
@@ -157,7 +158,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
         replyJob = scope.launch {
             try {
                 onState(if(proactive) "在想刚才的剧情…" else "正在回复…")
-                val data = context(proactive,clip,forced)
+                val data = context(proactive,clip,forced,targetStory)
                 var fallback = false
                 val response = try { models.reply(data,proactive) } catch(e: CancellationException) { throw e }
                 catch(_: Exception) { fallback = true; models.reply(data,proactive,true) }

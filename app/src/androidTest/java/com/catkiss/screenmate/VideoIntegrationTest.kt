@@ -43,10 +43,11 @@ class VideoIntegrationTest {
                     val retriever=MediaMetadataRetriever()
                     try {
                         retriever.setDataSource(clip.file.absolutePath)
-                        val a=retriever.getFrameAtTime(200000,MediaMetadataRetriever.OPTION_CLOSEST)!!
-                        val b=retriever.getFrameAtTime(1400000,MediaMetadataRetriever.OPTION_CLOSEST)!!
-                        assertNotEquals("The video must contain changing content",a.getPixel(a.width/3,a.height/3),b.getPixel(b.width/3,b.height/3))
-                        a.recycle(); b.recycle()
+                        val colors=(0..4).map { second ->
+                            val frame=retriever.getFrameAtTime(second*1_000_000L+200_000,MediaMetadataRetriever.OPTION_CLOSEST)!!
+                            val color=frame.getPixel(frame.width/3,frame.height/3); frame.recycle(); color
+                        }
+                        assertTrue("The video must contain changing content: $colors",colors.toSet().size>1)
                     } finally { retriever.release() }
                 }
                 clips.add(clip)

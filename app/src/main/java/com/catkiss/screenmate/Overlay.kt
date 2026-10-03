@@ -29,8 +29,14 @@ class Overlay(private val service: CaptureService, private val app: MateApp, pri
     private fun params(w: Int,h: Int) = WindowManager.LayoutParams(w,h,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_SECURE,
         PixelFormat.TRANSLUCENT).apply { gravity=Gravity.TOP or Gravity.LEFT; softInputMode=WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE }
+    fun appVisible(visible: Boolean) {
+        if(visible) { closePanel(); hideBubble.run() }
+        pet.visibility=if(visible) View.INVISIBLE else View.VISIBLE
+        petParams.flags=if(visible) petParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE else petParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        runCatching { wm.updateViewLayout(pet,petParams) }
+    }
     fun show() {
-        wm.addView(pet,petParams); reposition()
+        wm.addView(pet,petParams); reposition(); appVisible(MainActivity.visible)
         var startX=0f; var startY=0f; var x=0; var y=0; var moved=false
         val slop=ViewConfiguration.get(service).scaledTouchSlop
         pet.setOnTouchListener { _, event ->
@@ -81,6 +87,7 @@ class Overlay(private val service: CaptureService, private val app: MateApp, pri
         pet.invalidate(); closePanel(); hideBubble.run()
     }
     fun message(text: String) {
+        if(MainActivity.visible) return
         pet.bounce()
         if(panel!=null) { refresh(); return }
         handler.removeCallbacks(hideBubble); hideBubble.run()

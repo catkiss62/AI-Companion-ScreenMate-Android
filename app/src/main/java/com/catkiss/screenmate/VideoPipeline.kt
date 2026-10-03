@@ -32,89 +32,104 @@ object VideoDiagnostics {
     }
 }
 
-/** Bounded FIFO. A failed segment stays at its stage for explicit retry, never silently skipped. */
+/** Three ordered lanes overlap network work. Total buffered clips are still bounded. */
 class VideoPipeline(private val app: MateApp, private val gateway: ModelGateway,
                     private val record: (String,String,Long)->Unit,
-                    private val react: suspend (VideoClip)->Unit,
+                    private val react: suspend (VideoClip,String)->Unit,
                     private val state: (String)->Unit) {
     private data class Item(val clip: VideoClip,var evidence: VideoEvidence?=null,var story: String?=null)
     private val queue=ArrayDeque<Item>()
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main.immediate)
-    private var job: Job?=null
+    private val jobs=mutableMapOf<String,Job>()
     private var active=true
     private var generation=0
     private var failed=false
     private var backoffUntil=0L
+    private val gapNotes=mutableListOf<String>()
     var story=""; private set
-    // At most 6 complete clips plus the currently recording fragment (about 35 seconds).
     val canRecord get() = active && !failed && queue.size<6 && app.store.usage("vision")<app.config.dailyCap
     fun offer(clip: VideoClip) {
         if(!active) { clip.file.delete(); return }
         if(queue.size>=7) { gap("编码片段超出缓冲上限，未识别 ${clip.label()}"); clip.file.delete(); return }
         queue.add(Item(clip)); VideoDiagnostics.queue=queue.size
-        run()
+        kick()
     }
     fun gap(reason: String) {
         VideoDiagnostics.gaps++
+        gapNotes.add(reason)
         story=(story+"\n观察空缺：$reason").takeLast(12000)
         record("video_gap",reason,System.currentTimeMillis())
         state(reason)
     }
     fun retry() {
         if(System.currentTimeMillis()<backoffUntil) { state("视频限流退避中，请稍后重试"); return }
-        failed=false; run()
+        failed=false; kick()
     }
-    private fun run() {
-        if(!active || failed || job?.isActive==true || queue.isEmpty()) return
+    private fun stage(lane: String,item: Item,block: suspend ()->Unit) {
+        if(jobs[lane]?.isActive==true) return
         val ticket=generation
-        job=scope.launch {
-            while(active && !failed && queue.isNotEmpty() && generation==ticket) {
-                val item=queue.first(); val clip=item.clip
-                try {
-                    VideoDiagnostics.current=clip.sequence
-                    if(item.evidence==null) {
-                        if(app.store.usage("vision")>=app.config.dailyCap) { failed=true; state("达到本机视频/识图日上限；待处理片段保留，请调整上限后重试"); break }
-                        VideoDiagnostics.stage="识别 ${clip.label()}"; state(VideoDiagnostics.stage)
-                        withContext(Dispatchers.IO) { VideoDiagnostics.preserve(clip,File(app.cacheDir,"video-preview"),true) }
-                        val start=System.currentTimeMillis()
-                        val evidence=gateway.observeVideo(clip,story)
-                        ensureActive(); if(ticket!=generation) break
-                        item.evidence=evidence
-                        VideoDiagnostics.visionMs=System.currentTimeMillis()-start
-                        VideoDiagnostics.tokens=evidence.inputTokens
-                        VideoDiagnostics.evidence=evidence.text
-                        record("video_observation",evidence.text,clip.start)
-                    }
-                    if(item.story==null) {
-                        VideoDiagnostics.stage="整理视频 #${clip.sequence} 的连续剧情"; state(VideoDiagnostics.stage)
-                        val start=System.currentTimeMillis()
-                        val merged=gateway.integrateVideo(story,item.evidence!!.text)
-                        ensureActive(); if(ticket!=generation) break
-                        item.story=merged; story=merged
-                        VideoDiagnostics.storyMs=System.currentTimeMillis()-start
-                        VideoDiagnostics.story=story; VideoDiagnostics.observedEnd=clip.end
-                        record("video_story","${clip.label()} 后的连续剧情：\n$story",clip.end)
-                    }
-                    react(clip)
-                    ensureActive(); if(ticket!=generation) break
-                    VideoDiagnostics.completed++
-                    VideoDiagnostics.totalMs=(System.currentTimeMillis()-clip.end).coerceAtLeast(0)
-                    queue.removeFirst(); clip.file.delete(); VideoDiagnostics.queue=queue.size
-                    VideoDiagnostics.stage="已完成视频 #${clip.sequence} · 片尾至完成 ${VideoDiagnostics.totalMs/1000.0}秒 · 待处理${queue.size}段"
-                    state(VideoDiagnostics.stage)
-                } catch(e: CancellationException) { throw e }
-                catch(e: Exception) {
+        val task=scope.launch(start=CoroutineStart.LAZY) {
+            try { block() }
+            catch(e: CancellationException) { throw e }
+            catch(e: Exception) {
+                if(ticket==generation) {
                     failed=true
                     backoffUntil=System.currentTimeMillis()+(if(e is ApiFailure && e.code==429) maxOf(15L,e.retrySeconds ?: 30L)*1000 else 0)
-                    VideoDiagnostics.stage="视频 #${clip.sequence} 处理失败：${if(e is ApiFailure) e.message else "请检查接口或网络"}；片段保留，在诊断页重试"
-                    state(VideoDiagnostics.stage)
-                    record("video_error",VideoDiagnostics.stage,System.currentTimeMillis())
+                    VideoDiagnostics.stage="视频 #${item.clip.sequence} $lane 失败：${if(e is ApiFailure) e.message else "请检查接口或网络"}；片段保留，在诊断页重试"
+                    state(VideoDiagnostics.stage); record("video_error",VideoDiagnostics.stage,System.currentTimeMillis())
                 }
+            } finally {
+                if(ticket==generation) { jobs.remove(lane); scope.launch { yield(); kick() } }
             }
         }
+        jobs[lane]=task; task.start()
+    }
+    private fun kick() {
+        if(!active || failed || queue.isEmpty()) return
+        val ticket=generation
+        queue.firstOrNull { it.evidence==null }?.let { item -> stage("识别",item) {
+            val clip=item.clip
+            if(app.store.usage("vision")>=app.config.dailyCap) {
+                failed=true; VideoDiagnostics.stage="达到本机视频/识图日上限；片段保留，请调整后重试"; state(VideoDiagnostics.stage)
+                return@stage
+            }
+            VideoDiagnostics.current=clip.sequence
+            VideoDiagnostics.stage="识别 ${clip.label()}"; state(VideoDiagnostics.stage)
+            withContext(Dispatchers.IO) { VideoDiagnostics.preserve(clip,File(app.cacheDir,"video-preview"),true) }
+            val start=System.currentTimeMillis()
+            val previousEvidence=queue.takeWhile { it!==item }.mapNotNull { it.evidence?.text }.takeLast(2).joinToString("\n")
+            val evidence=gateway.observeVideo(clip,(story+"\n"+previousEvidence).takeLast(12000))
+            currentCoroutineContext().ensureActive(); if(ticket!=generation) return@stage
+            item.evidence=evidence
+            VideoDiagnostics.visionMs=System.currentTimeMillis()-start
+            VideoDiagnostics.tokens=evidence.inputTokens; VideoDiagnostics.evidence=evidence.text
+            record("video_observation",evidence.text,clip.start)
+        } }
+        queue.firstOrNull { it.story==null }?.takeIf { it.evidence!=null }?.let { item -> stage("整理",item) {
+            val start=System.currentTimeMillis()
+            val gapCursor=gapNotes.size
+            val merged=gateway.integrateVideo(story,item.evidence!!.text)
+            currentCoroutineContext().ensureActive(); if(ticket!=generation) return@stage
+            val withGaps=(merged+gapNotes.drop(gapCursor).joinToString("",prefix="") { "\n观察空缺：$it" }).takeLast(12000)
+            item.story=withGaps; story=withGaps
+            VideoDiagnostics.storyMs=System.currentTimeMillis()-start
+            VideoDiagnostics.story=story; VideoDiagnostics.observedEnd=item.clip.end
+            record("video_story","${item.clip.label()} 后的连续剧情：\n$story",item.clip.end)
+        } }
+        queue.firstOrNull()?.takeIf { it.story!=null }?.let { item -> stage("回复",item) {
+            val clip=item.clip
+            react(clip,item.story!!)
+            currentCoroutineContext().ensureActive(); if(ticket!=generation) return@stage
+            VideoDiagnostics.completed++
+            VideoDiagnostics.totalMs=(System.currentTimeMillis()-clip.end).coerceAtLeast(0)
+            check(queue.removeFirst()===item)
+            clip.file.delete(); VideoDiagnostics.queue=queue.size
+            VideoDiagnostics.stage="已完成视频 #${clip.sequence} · 片尾至完成 ${VideoDiagnostics.totalMs/1000.0}秒 · 待处理${queue.size}段"
+            state(VideoDiagnostics.stage)
+        } }
     }
     fun pause(paused: Boolean) {
-        generation++; active=!paused; job?.cancel(); job=null; failed=false
+        generation++; active=!paused; jobs.values.toList().forEach { it.cancel() }; jobs.clear(); failed=false
         if(queue.isNotEmpty()) gap("暂停/结束取消 ${queue.size} 个尚未完成的视频片段，未完成部分不视为已观看")
         queue.forEach { it.clip.file.delete() }; queue.clear(); VideoDiagnostics.queue=0
     }

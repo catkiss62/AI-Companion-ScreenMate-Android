@@ -55,6 +55,7 @@ class CaptureService: Service() {
             handler.postDelayed(this,200)
         }
     }
+    fun appVisibility(visible: Boolean) { overlay?.appVisible(visible); reconcileVideo() }
     fun retryVideo() { videoError=false; engine?.videoPipeline?.retry(); reconcileVideo() }
     private fun stopVideo() {
         videoGeneration++
@@ -95,7 +96,12 @@ class CaptureService: Service() {
                                     val bitmap=retriever.getFrameAtTime(1_000_000,android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                                     if(bitmap!=null) {
                                         val out=ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG,78,out)
-                                        val frame=CaptureDiagnostics.Frame(out.toByteArray(),clip.start+1000,bitmap.width,bitmap.height,0)
+                                        var dark=0; var samples=0
+                                        for(y in 0 until bitmap.height step maxOf(1,bitmap.height/40)) for(x in 0 until bitmap.width step maxOf(1,bitmap.width/40)) {
+                                            val pixel=bitmap.getPixel(x,y); samples++
+                                            if(android.graphics.Color.red(pixel)<12 && android.graphics.Color.green(pixel)<12 && android.graphics.Color.blue(pixel)<12) dark++
+                                        }
+                                        val frame=CaptureDiagnostics.Frame(out.toByteArray(),clip.start+1000,bitmap.width,bitmap.height,dark*100/samples)
                                         bitmap.recycle()
                                         handler.post { if(!ending && generation==videoGeneration) { CaptureDiagnostics.latest=frame; CaptureDiagnostics.note="视频片段中的代表帧；请回放视频检查动态内容" } }
                                     }

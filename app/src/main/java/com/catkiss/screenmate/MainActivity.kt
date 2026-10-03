@@ -35,8 +35,8 @@ class MainActivity: Activity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         home()
     }
-    override fun onResume() { super.onResume(); visible=true; handler.post(ticker) }
-    override fun onPause() { player?.stopPlayback(); visible=false; handler.removeCallbacks(ticker); super.onPause() }
+    override fun onResume() { super.onResume(); visible=true; CaptureService.instance?.appVisibility(true); handler.post(ticker) }
+    override fun onPause() { player?.stopPlayback(); visible=false; CaptureService.instance?.appVisibility(false); handler.removeCallbacks(ticker); super.onPause() }
     override fun onDestroy() { scope.cancel(); handler.removeCallbacksAndMessages(null); super.onDestroy() }
     private fun screen(title: String, subtitle: String) {
         player?.stopPlayback(); player=null

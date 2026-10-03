@@ -63,7 +63,7 @@ class VideoPipelineTest {
         lateinit var p: VideoPipeline
         try {
             withContext(Dispatchers.Main) {
-                p=VideoPipeline(app,fake,{kind,_,_ -> rows.add(kind)},{ done.complete(Unit) },{ if(it.contains("处理失败")) failed.complete(Unit) })
+                p=VideoPipeline(app,fake,{kind,_,_ -> rows.add(kind)},{ _,_ -> done.complete(Unit) },{ if(it.contains("失败")) failed.complete(Unit) })
                 p.offer(clip(1))
             }
             withTimeout(5000) { failed.await() }
@@ -88,7 +88,7 @@ class VideoPipelineTest {
         val clips=(1..6).map { clip(it) }
         try {
             withContext(Dispatchers.Main) {
-                p=VideoPipeline(app,fake,{kind,_,_ -> rows.add(kind)},{ reactions++ },{})
+                p=VideoPipeline(app,fake,{kind,_,_ -> rows.add(kind)},{ _,_ -> reactions++ },{})
                 clips.forEach { p.offer(it) }; assertFalse(p.canRecord)
             }
             withTimeout(5000) { started.await() }
@@ -100,4 +100,37 @@ class VideoPipelineTest {
             }
         } finally { release.complete(Unit); withContext(Dispatchers.Main) { p.close() } }
     }
+    @Test fun slowReplyDoesNotBlockNextVideoRecognitionOrStoryIntegration() = runBlocking {
+        val old=app.config.replyEveryVideo; app.config.replyEveryVideo=true
+        val id=app.store.create("video lanes","连续视频")
+        val speaking=CompletableDeferred<Unit>(); val nextMerged=CompletableDeferred<Unit>(); val release=CompletableDeferred<Unit>()
+        val secondShown=CompletableDeferred<Unit>(); var replyNumber=0
+        val fake=object: ModelGateway {
+            override suspend fun observe(base64: String,mode: String): Observation=error("unused")
+            override suspend fun observeVideo(clip: VideoClip,prior: String)=VideoEvidence("片段${clip.sequence}")
+            override suspend fun integrateVideo(previous: String,evidence: String): String {
+                if(evidence=="片段2") nextMerged.complete(Unit)
+                return previous+evidence
+            }
+            override suspend fun reply(context: String,proactive: Boolean,fallback: Boolean): String {
+                replyNumber++
+                if(replyNumber==1) {
+                    assertFalse(JSONObject(context).getString("continuous_video_story").contains("片段2"))
+                    speaking.complete(Unit); release.await()
+                } else { assertTrue(JSONObject(context).getString("continuous_video_story").contains("片段2")); secondShown.complete(Unit) }
+                return "测试反应。"
+            }
+        }
+        lateinit var e: WatchEngine
+        try {
+            withContext(Dispatchers.Main) { e=WatchEngine(app,id,"连续视频",{},{},fake); e.videoPipeline!!.offer(clip(1)) }
+            withTimeout(5000) { speaking.await() }
+            withContext(Dispatchers.Main) { e.videoPipeline!!.offer(clip(2)) }
+            withTimeout(5000) { nextMerged.await() }
+            assertFalse(secondShown.isCompleted)
+            release.complete(Unit)
+            withTimeout(5000) { secondShown.await() }
+        } finally { release.complete(Unit); withContext(Dispatchers.Main) { e.stop() }; app.deleteSession(id); app.config.replyEveryVideo=old }
+    }
+
 }
