@@ -43,6 +43,77 @@ class CaptureService: Service() {
     private var width=0
     private var height=0
     private var lastAttempt=0L
+    private var videoCapture: VideoCapture?=null
+    private var videoSequence=0
+    private var videoBlocked=""
+    private var videoError=false
+    private var videoGeneration=0
+    private val videoTicker=object: Runnable {
+        override fun run() {
+            if(ending) return
+            reconcileVideo()
+            handler.postDelayed(this,200)
+        }
+    }
+    fun retryVideo() { videoError=false; engine?.videoPipeline?.retry(); reconcileVideo() }
+    private fun stopVideo() {
+        videoGeneration++
+        display?.surface=null
+        videoCapture?.close(); videoCapture=null
+    }
+    private fun reconcileVideo() {
+        val e=engine ?: return
+        if(!e.videoMode) return
+        val reason=when {
+            videoError -> "视频编码失败，点击诊断页的重试"
+            e.paused -> "已暂停视频采集"
+            MainActivity.visible -> "在App内查看设置/诊断，暂停录制；切回视频继续"
+            !e.visible -> "共享目标不可见，暂停录制"
+            e.videoPipeline?.canRecord!=true -> "处理积压/接口失败/日上限，暂停新增录像；请看视频诊断"
+            else -> ""
+        }
+        if(reason.isNotEmpty()) {
+            if(videoCapture!=null) { stopVideo(); e.videoPipeline?.gap("$reason；未满5秒的片段未提交，形成观察空缺") }
+            if(videoBlocked!=reason) { videoBlocked=reason; state(reason) }
+            return
+        }
+        if(videoCapture!=null) return
+        videoBlocked=""
+        val generation=++videoGeneration
+        try {
+            val capture=VideoCapture(this,projection,width,height,(application as MateApp).config.capturePlaybackAudio,
+                { original ->
+                    if(ending || engine!==e || generation!=videoGeneration || !e.canCapture) original.file.delete()
+                    else {
+                        val clip=original.copy(sequence=++videoSequence)
+                        imageWorker.execute {
+                            runCatching {
+                                VideoDiagnostics.preserve(clip,java.io.File(cacheDir,"video-preview"),false)
+                                val retriever=android.media.MediaMetadataRetriever()
+                                try {
+                                    retriever.setDataSource(VideoDiagnostics.latest!!.file.absolutePath)
+                                    val bitmap=retriever.getFrameAtTime(1_000_000,android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                    if(bitmap!=null) {
+                                        val out=ByteArrayOutputStream(); bitmap.compress(Bitmap.CompressFormat.JPEG,78,out)
+                                        val frame=CaptureDiagnostics.Frame(out.toByteArray(),clip.start+1000,bitmap.width,bitmap.height,0)
+                                        bitmap.recycle()
+                                        handler.post { if(!ending && generation==videoGeneration) { CaptureDiagnostics.latest=frame; CaptureDiagnostics.note="视频片段中的代表帧；请回放视频检查动态内容" } }
+                                    }
+                                } finally { retriever.release() }
+                            }
+                            handler.post {
+                                if(!ending && engine===e && generation==videoGeneration && e.canCapture) e.videoPipeline?.offer(clip)
+                                else clip.file.delete()
+                            }
+                        }
+                    }
+                }, { error -> if(generation==videoGeneration && !ending) { videoError=true; state(error); VideoDiagnostics.stage=error } })
+            videoCapture=capture; VideoDiagnostics.audio=capture.audioStatus
+            display?.surface=capture.surface
+            capture.start()
+            state("连续视频采集中 · 每段约5秒 · ${capture.audioStatus}")
+        } catch(_: Exception) { videoError=true; stopVideo(); state("无法启动视频编码，诊断页可重试，或改用截图模式") }
+    }
     private val callback = object: MediaProjection.Callback() {
         override fun onStop() { end("系统已停止屏幕共享，会话已保存") }
         override fun onCapturedContentResize(w: Int,h: Int) { if(w>0 && h>0 && !ending) resize(w,h) }
@@ -65,7 +136,9 @@ class CaptureService: Service() {
             projection = getSystemService(MediaProjectionManager::class.java).getMediaProjection(Activity.RESULT_OK,consent)
             projection!!.registerCallback(callback,handler)
             val app = application as MateApp
-            CaptureDiagnostics.reset()
+            CaptureDiagnostics.reset(); VideoDiagnostics.reset()
+            java.io.File(cacheDir,"video-preview").deleteRecursively()
+            java.io.File(cacheDir,"video-segments").deleteRecursively()
             val mode = intent.getStringExtra("mode") ?: "无期迷途 · 剧情"
             val id = app.store.create(intent.getStringExtra("title") ?: "一起看看",mode)
             engine = WatchEngine(app,id,mode,::state,{ overlay?.message(it) },app.gateway ?: app.models)
@@ -73,7 +146,8 @@ class CaptureService: Service() {
             val size = screenSize()
             resize(size.first,size.second)
             display = projection!!.createVirtualDisplay("ScreenMate",width,height,resources.configuration.densityDpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,reader!!.surface,null,handler)
+                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,if(engine!!.videoMode) null else reader!!.surface,null,handler)
+            if(engine!!.videoMode) handler.post(videoTicker)
             state("陪看中 · 等待画面")
         } catch(_: Exception) { end("屏幕共享启动失败，请检查浮窗权限并重新开始") }
         return START_NOT_STICKY
@@ -87,7 +161,14 @@ class CaptureService: Service() {
     }
     private fun resize(w: Int,h: Int) {
         val scale = minOf(1.0,(if(engine?.storyMode==true) 2880.0 else 1280.0)/maxOf(w,h))
-        val nw=(w*scale).roundToInt().coerceAtLeast(2); val nh=(h*scale).roundToInt().coerceAtLeast(2)
+        val nw=((w*scale).roundToInt()/2*2).coerceAtLeast(2); val nh=((h*scale).roundToInt()/2*2).coerceAtLeast(2)
+        if(engine?.videoMode==true) {
+            if(nw==width && nh==height) return
+            if(videoCapture!=null) engine?.videoPipeline?.gap("画面尺寸变化，重新配置编码；边界未满5秒片段未提交")
+            stopVideo(); width=nw; height=nh
+            display?.resize(nw,nh,resources.configuration.densityDpi)
+            return
+        }
         if(nw == width && nh == height && reader != null) return
         val replacement = ImageReader.newInstance(nw,nh,PixelFormat.RGBA_8888,2)
         replacement.setOnImageAvailableListener({ source ->
@@ -196,6 +277,7 @@ class CaptureService: Service() {
     fun end(text: String = "已结束，记忆正在后台整理") {
         if(ending) return
         ending=true; status=text
+        handler.removeCallbacks(videoTicker); stopVideo()
         engine?.stop(); engine=null
         overlay?.destroy(); overlay=null
         reader?.setOnImageAvailableListener(null,null)

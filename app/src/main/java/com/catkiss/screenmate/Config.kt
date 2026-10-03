@@ -26,11 +26,17 @@ class Config(context: Context) {
         get() = prefs.getString("deepUrl", "https://api.deepseek.com/chat/completions")!!
         set(v) { prefs.edit().putString("deepUrl", v).apply() }
     var deepModel: String
-        get() = prefs.getString("deepModel", "deepseek-chat")!!
+        get() = prefs.getString("deepModel", "deepseek-flash")!!
         set(v) { prefs.edit().putString("deepModel", v).apply() }
     var persona: String
         get() = prefs.getString("persona", "你是陪我看故事的伙伴，温柔、自然、有自己的感受。用简短中文交流，别反复追问。")!!
         set(v) { prefs.edit().putString("persona", v.take(8000)).apply() }
+    var replyEveryVideo: Boolean
+        get() = prefs.getBoolean("replyEveryVideo", false)
+        set(v) { prefs.edit().putBoolean("replyEveryVideo",v).apply() }
+    var capturePlaybackAudio: Boolean
+        get() = prefs.getBoolean("capturePlaybackAudio", false)
+        set(v) { prefs.edit().putBoolean("capturePlaybackAudio",v).apply() }
     var intervalSeconds: Int
         get() = prefs.getInt("interval", 15).coerceIn(10, 120)
         set(v) { prefs.edit().putInt("interval", v.coerceIn(10, 120)).apply() }

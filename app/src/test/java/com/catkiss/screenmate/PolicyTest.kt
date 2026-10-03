@@ -74,4 +74,11 @@ class PolicyTest {
         catch(_: ApiFailure) { }
     }
 
+    @Test fun videoPayloadIsActuallyVideoAndTruncatedVisionIsRejected() {
+        val body=Wire.videoBody("ordered events","encoded-mp4","gemini-3.5-flash")
+        assertEquals("video/mp4",body.getJSONArray("contents").getJSONObject(0).getJSONArray("parts").getJSONObject(1).getJSONObject("inlineData").getString("mimeType"))
+        try { Wire.geminiText(JSONObject("""{"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"half"}]}}]}""")); fail() }
+        catch(_: ApiFailure) { }
+    }
+
 }

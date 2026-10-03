@@ -21,6 +21,28 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
     private val dialogue = DialogueTracker()
     private var settleJob: Job? = null
     private var evidenceVersion = 0L
+    val videoMode = mode.contains("连续视频")
+    private var videoReplyFailure: Exception?=null
+    val videoPipeline = if(videoMode) VideoPipeline(app,models,
+        { kind,text,time -> app.store.add(sessionId,kind,text,time) },
+        { clip -> videoReaction(clip) },onState) else null
+    private suspend fun videoReaction(clip: VideoClip) {
+        latestAt=SystemClock.elapsedRealtime()-(System.currentTimeMillis()-clip.end).coerceAtLeast(0)
+        evidenceVersion++
+        if(!app.config.replyEveryVideo) { maybeComment(true); return }
+        while(!closed && !paused && app.config.replyEveryVideo) {
+            replyJob?.join()
+            currentCoroutineContext().ensureActive()
+            if(closed || paused) return
+            videoReplyFailure=null
+            val task=reply(true,clip,true)
+            task.join()
+            currentCoroutineContext().ensureActive()
+            if(task.isCancelled) continue // A user turn gets priority; this test reaction resumes after it.
+            videoReplyFailure?.let { throw it }
+            return
+        }
+    }
     val storyMode = mode.contains("无期迷途")
     val captureEpoch get() = policy.epoch
     private var lastHash: String? = null
@@ -57,7 +79,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
     }
     fun frame(base64: String, hash: String, capturedAt: Long = SystemClock.elapsedRealtime(), diagnostic: CaptureDiagnostics.Frame? = null) {
         val now = SystemClock.elapsedRealtime()
-        if(!canCapture || visionJob?.isActive == true || !policy.mayObserve(now) || app.store.usage("vision")>=app.config.dailyCap) return
+        if(videoMode || !canCapture || visionJob?.isActive == true || !policy.mayObserve(now) || app.store.usage("vision")>=app.config.dailyCap) return
         if(hash == lastHash && now-lastFrameAt<60_000) return
         val ticket = policy.epoch
         val versionAtCapture=evidenceVersion
@@ -105,11 +127,13 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
         records++
         if(records % 30 == 0) app.archive(sessionId)
     }
-    private fun context(proactive: Boolean): String {
+    private fun context(proactive: Boolean, clip: VideoClip?=null, forced: Boolean=false): String {
         val age = if(latestAt == 0L) -1 else (SystemClock.elapsedRealtime() - latestAt)/1000
         val status = when { paused -> "已暂停，未观察当前画面"; !visible -> "分享的应用当前不可见"; age < 0 -> "尚无画面证据"; age > 60 -> "画面证据已过期，距采集${age}秒，不能当作当前画面"; else -> "最近一次有效观察距今${age}秒" }
         return JSONObject().put("task",if(proactive) "根据已观察的新节点决定简短主动反应" else "回复最后一条真实用户发言")
             .put("capture_status",status).put("mode",mode)
+            .put("video_test",forced).put("target_video",clip?.label() ?: "")
+            .put("continuous_video_story",videoPipeline?.story ?: "")
             .put("evidence_rule","dialogue 是本地 OCR，可能有错漏；同页补充不是新台词。按 time 理解先后，晚返回的 observation 可能早于此前记录。只能评论已观察剧情，不补全漏字。")
             .put("current_user_message",if(proactive) "" else app.store.lastChat(sessionId)?.takeIf { it.kind=="user" }?.body ?: "")
             .put("session_summary",app.store.session(sessionId)?.summary ?: "")
@@ -122,7 +146,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
                 rows.forEach { put(JSONObject().put("kind",it.kind).put("time",it.time).put("text",it.body)) }
             }).toString()
     }
-    private fun reply(proactive: Boolean) {
+    private fun reply(proactive: Boolean, clip: VideoClip?=null, forced: Boolean=false): Job {
         val serial = ++replySerial
         val ticket = policy.epoch
         val observedAt = latestAt
@@ -133,23 +157,26 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
         replyJob = scope.launch {
             try {
                 onState(if(proactive) "在想刚才的剧情…" else "正在回复…")
-                val data = context(proactive)
+                val data = context(proactive,clip,forced)
                 var fallback = false
                 val response = try { models.reply(data,proactive) } catch(e: CancellationException) { throw e }
                 catch(_: Exception) { fallback = true; models.reply(data,proactive,true) }
                 if(closed || ticket != policy.epoch || serial != replySerial) return@launch
                 CaptureDiagnostics.replyMillis=SystemClock.elapsedRealtime()-replyStarted
-                if(proactive && !ReactionFreshness.accepts(storyMode,evidenceVersion-version)) { onState("剧情已推进，略过过时评论"); return@launch }
-                if(proactive && (!policy.active || !visible || MainActivity.visible || SystemClock.elapsedRealtime()-observedAt > 60_000)) return@launch
+                if(proactive && !forced && !ReactionFreshness.accepts(storyMode,evidenceVersion-version)) { onState("剧情已推进，略过过时评论"); return@launch }
+                if(proactive && !forced && (!policy.active || !visible || MainActivity.visible || SystemClock.elapsedRealtime()-observedAt > 60_000)) return@launch
+                if(forced && response.trim()=="SILENT") throw ApiFailure(-1)
                 if(!proactive || response.trim() != "SILENT") {
-                    record("assistant",response)
-                    onMessage(response)
+                    val displayed=if(forced && clip!=null) "【${clip.label()} · 延迟${(System.currentTimeMillis()-clip.end).coerceAtLeast(0)/1000}秒】\n$response" else response
+                    record("assistant",displayed)
+                    onMessage(displayed)
                 }
                 onState(if(fallback) "本次由 DeepSeek 兜底回复" else if(paused) "已暂停观察" else "陪看中")
             } catch(e: CancellationException) { throw e }
-            catch(e: Exception) { if(!closed && ticket == policy.epoch && serial == replySerial) onState("回复失败，可重试：${if(e is ApiFailure) e.message else "请检查接口配置或网络"}") }
+            catch(e: Exception) { if(forced) videoReplyFailure=e; if(!closed && ticket == policy.epoch && serial == replySerial) onState("回复失败，可重试：${if(e is ApiFailure) e.message else "请检查接口配置或网络"}") }
             finally { if(ticket == policy.epoch && serial == replySerial) userReply = false }
         }
+        return replyJob!!
     }
     fun retryReply() {
         if(closed || userReply) return
@@ -159,6 +186,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
     fun pause() {
         if(closed) return
         paused = !paused
+        videoPipeline?.pause(paused)
         policy.invalidate(); visionJob?.cancel(); replyJob?.cancel(); userReply = false
         settleJob?.cancel(); dialogue.reset()
         if(!paused) { policy.start(); lastHash=null; latestAt=0 }
@@ -166,7 +194,7 @@ class WatchEngine(private val app: MateApp, val sessionId: Long, private val mod
     }
     fun stop() {
         if(closed) return
-        closed=true; policy.invalidate(); scope.cancel()
+        closed=true; videoPipeline?.close(); policy.invalidate(); scope.cancel()
         app.store.finish(sessionId); app.archive(sessionId)
     }
 }

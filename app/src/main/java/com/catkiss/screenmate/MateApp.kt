@@ -14,6 +14,9 @@ class MateApp : Application() {
         internal set
     override fun onCreate() {
         super.onCreate()
+        java.io.File(cacheDir,"video-segments").deleteRecursively()
+        java.io.File(cacheDir,"video-preview").deleteRecursively()
+        java.io.File(cacheDir,"video-playback.mp4").delete()
         config = Config(this); store = Store(this); models = Models(config,store)
         store.recover().forEach { archive(it) }
     }
