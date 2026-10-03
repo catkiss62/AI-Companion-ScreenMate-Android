@@ -90,8 +90,16 @@ class CaptureIntegrationTest {
             assertNotNull(input); input.click(); input.text="你看到了吗"
             device.findObject(By.text("发送")).click()
             assertTrue(device.wait(Until.hasObject(By.textContains("我在这里陪你")),8000))
-            device.findObject(By.text("收起")).click()
-            app.startActivity(android.content.Intent(app,MainActivity::class.java).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+            val shot=java.io.File(app.cacheDir,"qa-overlay-chat.png")
+            assertTrue(device.takeScreenshot(shot))
+            val values=android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Images.Media.DISPLAY_NAME,"qa-overlay-chat.png")
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE,"image/png")
+                put(android.provider.MediaStore.Images.Media.RELATIVE_PATH,"Pictures/ScreenMateQA")
+            }
+            val uri=app.contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI,values)!!
+            app.contentResolver.openOutputStream(uri)!!.use { it.write(shot.readBytes()) }; shot.delete()
+            device.findObject(By.text("返回")).click()
             assertTrue(device.wait(Until.hasObject(By.text("结束本次陪看")),5000))
             device.findObject(By.text("结束本次陪看")).click()
             withTimeout(10000) { while(CaptureService.instance!=null) delay(100) }

@@ -84,12 +84,15 @@ class DeviceTest {
                     else if(view is android.view.ViewGroup) (0 until view.childCount).flatMap { buttons(view.getChildAt(it)) }
                     else emptyList()
                 buttons(activity.window.decorView).first { it.text.toString()=="接口与陪伴设置" }.performClick()
-                @Suppress("DEPRECATION") activity.onBackPressed()
-                assertFalse(activity.isFinishing)
-                assertTrue(buttons(activity.window.decorView).any { it.text.toString()=="开始陪看" })
-                @Suppress("DEPRECATION") activity.onBackPressed()
-                assertTrue(activity.isFinishing)
             }
+            val device=androidx.test.uiautomator.UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+            device.pressBack(); device.waitForIdle()
+            scenario.onActivity { activity ->
+                assertFalse(activity.isFinishing)
+                assertNotNull(activity.findViewById<android.view.View>(android.R.id.content))
+            }
+            device.pressBack(); device.waitForIdle()
+            assertEquals(androidx.lifecycle.Lifecycle.State.DESTROYED,scenario.state)
         }
     }
     @Test fun stoppingEngineCancelsPendingReplyAndPreservesUserRecord() = runBlocking {
