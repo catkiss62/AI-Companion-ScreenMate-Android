@@ -24,6 +24,7 @@ class VideoIntegrationTest {
         val oldDeep=app.config.secret("deep")
         val clips=mutableListOf<VideoClip>(); val replies=mutableListOf<String>()
         var session=0L
+        var audioPhase=false
         var scenario: ActivityScenario<CaptureHarnessActivity>?=null
         val fake=object: ModelGateway {
             override suspend fun observe(base64: String,mode: String): Observation=error("Video mode must not send screenshots")
@@ -35,6 +36,8 @@ class VideoIntegrationTest {
                     try {
                         extractor.setDataSource(clip.file.absolutePath)
                         val videoTrack=(0 until extractor.trackCount).first { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)!!.startsWith("video/") }
+                        val hasAudio=(0 until extractor.trackCount).any { extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)!!.startsWith("audio/") }
+                        assertEquals(audioPhase,hasAudio); assertEquals(audioPhase,clip.audio)
                         extractor.selectTrack(videoTrack)
                         assertTrue(extractor.sampleFlags and MediaExtractor.SAMPLE_FLAG_SYNC!=0)
                         var frames=0; while(extractor.sampleTime>=0) { frames++; extractor.advance() }
@@ -49,6 +52,15 @@ class VideoIntegrationTest {
                         }
                         assertTrue("The video must contain changing content: $colors",colors.toSet().size>1)
                     } finally { retriever.release() }
+                }
+                if(clips.isEmpty() || audioPhase) withContext(Dispatchers.IO) {
+                    val values=android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.Video.Media.DISPLAY_NAME,if(audioPhase) "qa-video-with-audio.mp4" else "qa-video-first.mp4")
+                        put(android.provider.MediaStore.Video.Media.MIME_TYPE,"video/mp4")
+                        put(android.provider.MediaStore.Video.Media.RELATIVE_PATH,"Movies/ScreenMateQA")
+                    }
+                    val uri=app.contentResolver.insert(android.provider.MediaStore.Video.Media.EXTERNAL_CONTENT_URI,values)!!
+                    app.contentResolver.openOutputStream(uri)!!.use { out -> clip.file.inputStream().use { it.copyTo(out) } }
                 }
                 clips.add(clip)
                 return VideoEvidence("${clip.label()} 里人物找到钥匙",1800)
@@ -80,7 +92,12 @@ class VideoIntegrationTest {
             delay(700)
             val before=withContext(Dispatchers.Main) { VideoDiagnostics.completed }
             delay(5500)
-            withContext(Dispatchers.Main) { assertEquals(before,VideoDiagnostics.completed); CaptureService.instance!!.engine!!.pause() }
+            device.executeShellCommand("pm grant ${app.packageName} android.permission.RECORD_AUDIO")
+            withContext(Dispatchers.Main) {
+                assertEquals(before,VideoDiagnostics.completed)
+                audioPhase=true; app.config.capturePlaybackAudio=true
+                CaptureService.instance!!.engine!!.pause()
+            }
             withTimeout(25000) { while(withContext(Dispatchers.Main) { VideoDiagnostics.completed<=before }) delay(200) }
             withContext(Dispatchers.Main) { CaptureService.instance!!.end() }
             withTimeout(5000) { while(CaptureService.instance!=null) delay(100) }

@@ -5,4 +5,5 @@ test_status=0
 gradle --no-daemon :app:connectedDebugAndroidTest || test_status=$?
 mkdir -p app/build/reports/device-ui
 adb pull /sdcard/Pictures/ScreenMateQA/. app/build/reports/device-ui/ || true
+adb pull /sdcard/Movies/ScreenMateQA/. app/build/reports/device-ui/ || true
 exit "$test_status"
