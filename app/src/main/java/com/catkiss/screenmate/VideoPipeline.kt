@@ -7,6 +7,12 @@ import java.io.File
 object VideoDiagnostics {
     var latest: VideoClip?=null
     var sent: VideoClip?=null
+    var recorded=0
+    var requests=0
+    var recognized=0
+    var integrated=0
+    var lastFailure=""
+    val gapHistory=mutableListOf<String>()
     var completed=0
     var queue=0
     var current=0
@@ -21,6 +27,7 @@ object VideoDiagnostics {
     var evidence=""
     var story=""
     fun reset() {
+        recorded=0; requests=0; recognized=0; integrated=0; lastFailure=""; gapHistory.clear(); ApiDiagnostics.clear()
         latest=null; sent=null; completed=0; queue=0; current=0; observedEnd=0; visionMs=0; storyMs=0
         totalMs=0; tokens=0; gaps=0; stage="等待视频"; audio="未启用播放音轨"; evidence=""; story=""
     }
@@ -47,7 +54,14 @@ class VideoPipeline(private val app: MateApp, private val gateway: ModelGateway,
     private var backoffUntil=0L
     private val gapNotes=mutableListOf<String>()
     var story=""; private set
-    val canRecord get() = active && !failed && queue.size<6 && app.store.usage("vision")<app.config.dailyCap
+    val blockedReason: String get() = when {
+        !active -> "视频处理已暂停"
+        failed -> "${VideoDiagnostics.lastFailure.ifBlank { VideoDiagnostics.stage }}；暂停新增录像，需手动重试"
+        app.store.usage("vision")>=app.config.dailyCap -> "达到本机识图日上限 ${app.config.dailyCap} 次（不是服务端429）；请调整设置后重试"
+        queue.size>=6 -> "处理积压：待处理 ${queue.size} 段，暂停新增录像；队列减少后自动恢复"
+        else -> ""
+    }
+    val canRecord get() = blockedReason.isEmpty()
     fun offer(clip: VideoClip) {
         if(!active) { clip.file.delete(); return }
         if(queue.size>=7) { gap("编码片段超出缓冲上限，未识别 ${clip.label()}"); clip.file.delete(); return }
@@ -56,13 +70,15 @@ class VideoPipeline(private val app: MateApp, private val gateway: ModelGateway,
     }
     fun gap(reason: String) {
         VideoDiagnostics.gaps++
+        VideoDiagnostics.gapHistory.add(reason)
+        if(VideoDiagnostics.gapHistory.size>10) VideoDiagnostics.gapHistory.removeAt(0)
         gapNotes.add(reason)
         story=(story+"\n观察空缺：$reason").takeLast(12000)
         record("video_gap",reason,System.currentTimeMillis())
         state(reason)
     }
     fun retry() {
-        if(System.currentTimeMillis()<backoffUntil) { state("视频限流退避中，请稍后重试"); return }
+        if(System.currentTimeMillis()<backoffUntil) { state("视频限流等待中，约${(backoffUntil-System.currentTimeMillis()+999)/1000}秒后可手动重试"); return }
         failed=false; kick()
     }
     private fun stage(lane: String,item: Item,block: suspend ()->Unit) {
@@ -76,6 +92,7 @@ class VideoPipeline(private val app: MateApp, private val gateway: ModelGateway,
                     failed=true
                     backoffUntil=System.currentTimeMillis()+(if(e is ApiFailure && e.code==429) maxOf(15L,e.retrySeconds ?: 30L)*1000 else 0)
                     VideoDiagnostics.stage="视频 #${item.clip.sequence} $lane 失败：${if(e is ApiFailure) e.message else "请检查接口或网络"}；片段保留，在诊断页重试"
+                    VideoDiagnostics.lastFailure=VideoDiagnostics.stage
                     state(VideoDiagnostics.stage); record("video_error",VideoDiagnostics.stage,System.currentTimeMillis())
                 }
             } finally {
@@ -90,7 +107,7 @@ class VideoPipeline(private val app: MateApp, private val gateway: ModelGateway,
         queue.firstOrNull { it.evidence==null }?.let { item -> stage("识别",item) {
             val clip=item.clip
             if(app.store.usage("vision")>=app.config.dailyCap) {
-                failed=true; VideoDiagnostics.stage="达到本机视频/识图日上限；片段保留，请调整后重试"; state(VideoDiagnostics.stage)
+                failed=true; VideoDiagnostics.stage="达到本机视频/识图日上限；片段保留，请调整后重试"; VideoDiagnostics.lastFailure=VideoDiagnostics.stage; state(VideoDiagnostics.stage)
                 return@stage
             }
             VideoDiagnostics.current=clip.sequence
@@ -98,9 +115,11 @@ class VideoPipeline(private val app: MateApp, private val gateway: ModelGateway,
             withContext(Dispatchers.IO) { VideoDiagnostics.preserve(clip,File(app.cacheDir,"video-preview"),true) }
             val start=System.currentTimeMillis()
             val previousEvidence=queue.takeWhile { it!==item }.mapNotNull { it.evidence?.text }.takeLast(2).joinToString("\n")
+            VideoDiagnostics.requests++
             val evidence=gateway.observeVideo(clip,(story+"\n"+previousEvidence).takeLast(12000))
             currentCoroutineContext().ensureActive(); if(ticket!=generation) return@stage
             item.evidence=evidence
+            VideoDiagnostics.recognized++
             VideoDiagnostics.visionMs=System.currentTimeMillis()-start
             VideoDiagnostics.tokens=evidence.inputTokens; VideoDiagnostics.evidence=evidence.text
             record("video_observation",evidence.text,clip.start)
@@ -111,6 +130,7 @@ class VideoPipeline(private val app: MateApp, private val gateway: ModelGateway,
             val merged=gateway.integrateVideo(story,item.evidence!!.text)
             currentCoroutineContext().ensureActive(); if(ticket!=generation) return@stage
             val withGaps=(merged+gapNotes.drop(gapCursor).joinToString("",prefix="") { "\n观察空缺：$it" }).takeLast(12000)
+            VideoDiagnostics.integrated++
             item.story=withGaps; story=withGaps
             VideoDiagnostics.storyMs=System.currentTimeMillis()-start
             VideoDiagnostics.story=story; VideoDiagnostics.observedEnd=item.clip.end

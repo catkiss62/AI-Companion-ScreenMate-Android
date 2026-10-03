@@ -75,6 +75,23 @@ class DeviceTest {
             }
         }
     }
+    @Test fun screenshotsAllowedAndBackLeavesHome() {
+        ActivityScenario.launch<MainActivity>(Intent(app,MainActivity::class.java)).use { scenario ->
+            scenario.onActivity { activity ->
+                assertEquals(0,activity.window.attributes.flags and android.view.WindowManager.LayoutParams.FLAG_SECURE)
+                fun buttons(view: android.view.View): List<android.widget.Button> =
+                    if(view is android.widget.Button) listOf(view)
+                    else if(view is android.view.ViewGroup) (0 until view.childCount).flatMap { buttons(view.getChildAt(it)) }
+                    else emptyList()
+                buttons(activity.window.decorView).first { it.text.toString()=="接口与陪伴设置" }.performClick()
+                @Suppress("DEPRECATION") activity.onBackPressed()
+                assertFalse(activity.isFinishing)
+                assertTrue(buttons(activity.window.decorView).any { it.text.toString()=="开始陪看" })
+                @Suppress("DEPRECATION") activity.onBackPressed()
+                assertTrue(activity.isFinishing)
+            }
+        }
+    }
     @Test fun stoppingEngineCancelsPendingReplyAndPreservesUserRecord() = runBlocking {
         val id=app.store.create("test","video")
         val began=CompletableDeferred<Unit>(); var cancelled=false; var shown=false

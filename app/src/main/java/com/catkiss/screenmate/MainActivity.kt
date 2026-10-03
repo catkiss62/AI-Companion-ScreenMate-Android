@@ -28,17 +28,20 @@ class MainActivity: Activity() {
     private var pendingMode="视频陪看"
     private var selectedSession=0L
     private var player: VideoView?=null
+    private var atHome=true
     private val handler=Handler(Looper.getMainLooper())
     private val ticker=object: Runnable { override fun run() { statusView?.text=CaptureService.status; handler.postDelayed(this,1000) } }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        if(Build.VERSION.SDK_INT>=33) onBackInvokedDispatcher.registerOnBackInvokedCallback(
+            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT) { navigateBack() }
         home()
     }
     override fun onResume() { super.onResume(); visible=true; CaptureService.instance?.appVisibility(true); handler.post(ticker) }
     override fun onPause() { player?.stopPlayback(); visible=false; CaptureService.instance?.appVisibility(false); handler.removeCallbacks(ticker); super.onPause() }
     override fun onDestroy() { scope.cancel(); handler.removeCallbacksAndMessages(null); super.onDestroy() }
     private fun screen(title: String, subtitle: String) {
+        atHome=false
         player?.stopPlayback(); player=null
         statusView=null
         val scroll=ScrollView(this).apply { setBackgroundColor(Color.rgb(244,246,243)); clipToPadding=false }
@@ -68,7 +71,8 @@ class MainActivity: Activity() {
     }
     private fun message(text: String) { Toast.makeText(this,text,Toast.LENGTH_LONG).show() }
     private fun home() {
-        screen("一起看看", "ScreenMate · 0.1.2 连续视频测试版\n给剧情留一点陪伴，也给屏幕留一点安静。")
+        screen("一起看看", "ScreenMate · 0.1.3 连续视频诊断版\n给剧情留一点陪伴，也给屏幕留一点安静。")
+        atHome=true
         statusView=label(CaptureService.status)
         body.addView(CheckBox(this).apply {
             text="视频测试：每段识别并整理后立即回复一句"; isChecked=app.config.replyEveryVideo
@@ -179,18 +183,28 @@ class MainActivity: Activity() {
         button("打开参考项目原人物素材") {
             startActivity(Intent(Intent.ACTION_VIEW,Uri.parse("https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget/blob/main/assets/DSniang1.png")))
         }
-        button("恢复默认小鲸鱼") {
+        button("恢复默认鲸鱼娘") {
             if(CaptureService.instance!=null) message("请先结束当前陪看") else { File(filesDir,"mascot.png").delete(); message("已恢复，下次开始生效") }
         }
-        label("参考项目中的人物图需要你在本机选择导入。本仓库只包含原创代码绘制的小鲸鱼占位，不包含该人物美术资产。",14f)
+        label("默认人物：MeteorNOX/DeepSeek-Balance-Whale-Widget 的 DSniang1.png；仍可导入自选图片。",14f)
         button("返回") { home() }
     }
     private fun diagnostics() {
-        screen("识屏诊断","这里显示实际采集及送给官方 Gemini 的图片。仅保留在内存，打开本页时停止取得新画面；切回游戏继续。黑色区域比例只是线索，不代表已判定播放保护。")
+        screen("识屏诊断","这里显示实际视频、截图和接口诊断。视频预览保存在本机缓存，截图保留在内存；打开本页时停止取得新画面；切回游戏继续。黑色区域比例只是线索，不代表已判定播放保护。")
         val vd=VideoDiagnostics
         label("连续视频",20f)
-        label("${vd.stage}\n音轨：${vd.audio}\n已完成 ${vd.completed} 段 / 待处理 ${vd.queue} 段 / 空缺 ${vd.gaps} 处\n最近识别 ${vd.visionMs}ms / 整理 ${vd.storyMs}ms / 回复 ${CaptureDiagnostics.replyMillis}ms\n最近视频输入token：${vd.tokens}（0表示未取得用量）\n剧情理解推进到：${if(vd.observedEnd>0) SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(Date(vd.observedEnd)) else "尚无"}\n片尾至完成：${vd.totalMs/1000.0}秒")
-        button("重试视频采集 / 失败片段") { CaptureService.instance?.retryVideo(); message("已请求重试；切回视频后采集继续") }
+        fun elapsed(ms: Long) = if(ms>0) "${ms}ms" else "未完成"
+        label("${vd.stage}\n采集状态：${CaptureService.status}\n音轨：${vd.audio}\n录制成功 ${vd.recorded} 段 / 识别请求 ${vd.requests} 次 / 识别成功 ${vd.recognized} 段 / 整理成功 ${vd.integrated} 段\n流程完成 ${vd.completed} 段 / 待处理 ${vd.queue} 段 / 空缺 ${vd.gaps} 处\n最近识别 ${elapsed(vd.visionMs)} / 整理 ${elapsed(vd.storyMs)} / 回复 ${elapsed(CaptureDiagnostics.replyMillis)}\n最近视频输入 Token：${if(vd.tokens>0) vd.tokens.toString() else "未取得"}\n剧情理解推进到：${if(vd.observedEnd>0) SimpleDateFormat("HH:mm:ss",Locale.CHINA).format(Date(vd.observedEnd)) else "尚无"}\n片尾至完成：${if(vd.completed>0) "${vd.totalMs/1000.0}秒" else "未完成"}")
+        label("最近失败（保留至下一次失败或新会话）\n${vd.lastFailure.ifBlank { "暂无" }}",14f).setTextColor(Color.rgb(180,45,65))
+        label("最近接口请求（本机时间；不含密钥与请求正文）\n${ApiDiagnostics.snapshot()}",14f).setTextIsSelectable(true)
+        label("最近观察空缺\n${vd.gapHistory.ifEmpty { listOf("暂无") }.joinToString("\n")}",14f)
+        button("刷新诊断") { diagnostics() }
+        button("复制接口诊断") {
+            val text="ScreenMate 0.1.3\n${vd.stage}\n${vd.lastFailure}\n${ApiDiagnostics.snapshot()}\n${vd.gapHistory.joinToString("\n") }"
+            getSystemService(android.content.ClipboardManager::class.java).setPrimaryClip(android.content.ClipData.newPlainText("ScreenMate诊断",text))
+            message("已复制接口诊断，不包含密钥或聊天正文")
+        }
+        button("重试视频采集 / 失败片段") { CaptureService.instance?.retryVideo(); diagnostics() }
         fun replay(caption: String,clip: VideoClip?) {
             label(caption,20f)
             if(clip==null || !clip.file.exists()) { label("暂无片段"); return }
@@ -322,5 +336,6 @@ class MainActivity: Activity() {
         }
     }
     @Deprecated("Activity platform callback")
-    override fun onBackPressed() { home() }
+    override fun onBackPressed() { navigateBack() }
+    private fun navigateBack() { if(atHome) finish() else home() }
 }

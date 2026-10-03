@@ -1,6 +1,7 @@
 package com.catkiss.screenmate
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -27,7 +28,7 @@ class Overlay(private val service: CaptureService, private val app: MateApp, pri
     private var pausedButton: Button?=null
     private val hideBubble=Runnable { bubble?.let { remove(it) }; bubble=null }
     private fun params(w: Int,h: Int) = WindowManager.LayoutParams(w,h,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_SECURE,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
         PixelFormat.TRANSLUCENT).apply { gravity=Gravity.TOP or Gravity.LEFT; softInputMode=WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE }
     fun appVisible(visible: Boolean) {
         if(visible) { closePanel(); hideBubble.run() }
@@ -92,9 +93,9 @@ class Overlay(private val service: CaptureService, private val app: MateApp, pri
         if(panel!=null) { refresh(); return }
         handler.removeCallbacks(hideBubble); hideBubble.run()
         val view=TextView(service).apply {
-            this.text=text; textSize=16f; setTextColor(Color.rgb(35,57,62)); maxLines=7
+            this.text=text; textSize=16f; setTextColor(Color.WHITE); maxLines=7
             setPadding(service.dp(16),service.dp(12),service.dp(16),service.dp(12))
-            background=rounded(Color.rgb(244,251,249)); elevation=service.dp(6).toFloat()
+            background=rounded(Color.argb(179,24,30,42)); elevation=service.dp(6).toFloat()
             setOnClickListener { openPanel() }
         }
         val size=screen()
@@ -130,6 +131,10 @@ class Overlay(private val service: CaptureService, private val app: MateApp, pri
         val row=LinearLayout(service)
         fun action(label: String, run: ()->Unit) = Button(service).apply { text=label; textSize=12f; setPadding(0,0,0,0); setOnClickListener { run() } }.also { row.addView(it,LinearLayout.LayoutParams(0,service.dp(48),1f)) }
         pausedButton=action(if(engine.paused) "继续" else "暂停") { engine.pause() }
+        action("返回") {
+            closePanel()
+            service.startActivity(Intent(service,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
+        }
         action("重试") { engine.retryReply() }
         action("发送") { if(engine.send(input.text.toString().trim())) { input.text.clear(); refresh() } else Toast.makeText(service,"请等待当前回复，或先输入文字",Toast.LENGTH_SHORT).show() }
         root.addView(row)
@@ -161,6 +166,7 @@ class Overlay(private val service: CaptureService, private val app: MateApp, pri
 class MascotView(context: Context, private val app: MateApp): View(context) {
     private val paint=Paint(Paint.ANTI_ALIAS_FLAG)
     private val image=File(context.filesDir,"mascot.png").takeIf { it.exists() }?.let { BitmapFactory.decodeFile(it.path) }
+        ?: BitmapFactory.decodeResource(resources,R.drawable.dsniang1)
     init { contentDescription="陪看伙伴，点击聊天，自由拖动" }
     override fun performClick(): Boolean { super.performClick(); return true }
     override fun onDraw(canvas: Canvas) {

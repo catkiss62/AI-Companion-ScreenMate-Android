@@ -71,20 +71,20 @@ jobs:
         shell: bash
         run: |
           mkdir -p deliverables
-          cp app/build/outputs/apk/debug/app-debug.apk deliverables/ScreenMate-0.1.2-test.apk
-          sha256sum deliverables/ScreenMate-0.1.2-test.apk > deliverables/SHA256SUMS.txt
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs deliverables/ScreenMate-0.1.2-test.apk > deliverables/APK-signature.txt
+          cp app/build/outputs/apk/debug/app-debug.apk deliverables/ScreenMate-0.1.3-test.apk
+          sha256sum deliverables/ScreenMate-0.1.3-test.apk > deliverables/SHA256SUMS.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs deliverables/ScreenMate-0.1.3-test.apk > deliverables/APK-signature.txt
           expected=$(keytool -exportcert -alias androiddebugkey -keystore "$SCREENMATE_TEST_KEYSTORE" -storepass android 2>/dev/null | sha256sum | cut -d ' ' -f 1)
           actual=$(sed -n 's/Signer #1 certificate SHA-256 digest: //p' deliverables/APK-signature.txt)
           test "$actual" = "$expected"
           printf 'Commit: %s\nCI: %s/%s/actions/runs/%s\n' "$GITHUB_SHA" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" > deliverables/BUILD.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: ScreenMate-0.1.2-test
+          name: ScreenMate-0.1.3-test
           path: deliverables/
           retention-days: 60
       - name: Save APK in a draft (never publish)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "screenmate-v0.1.2-test-${GITHUB_RUN_NUMBER}" deliverables/* --draft --title "ScreenMate 0.1.2 test · CI ${GITHUB_RUN_NUMBER}" --notes "Unpublished tablet test build. No TTS or phone memory sync. See BUILD.txt and the repository ledger for validation and limitations." --target "$GITHUB_SHA"
+          gh release create "screenmate-v0.1.3-test-${GITHUB_RUN_NUMBER}" deliverables/* --draft --title "ScreenMate 0.1.3 test · CI ${GITHUB_RUN_NUMBER}" --notes "Unpublished tablet test build. No TTS or phone memory sync. See BUILD.txt and the repository ledger for validation and limitations." --target "$GITHUB_SHA"

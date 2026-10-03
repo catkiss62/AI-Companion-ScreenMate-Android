@@ -70,7 +70,7 @@ class CaptureService: Service() {
             e.paused -> "已暂停视频采集"
             MainActivity.visible -> "在App内查看设置/诊断，暂停录制；切回视频继续"
             !e.visible -> "共享目标不可见，暂停录制"
-            e.videoPipeline?.canRecord!=true -> "处理积压/接口失败/日上限，暂停新增录像；请看视频诊断"
+            e.videoPipeline?.canRecord!=true -> e.videoPipeline?.blockedReason ?: "视频处理尚未初始化"
             else -> ""
         }
         if(reason.isNotEmpty()) {
@@ -87,6 +87,7 @@ class CaptureService: Service() {
                     if(ending || engine!==e || generation!=videoGeneration || !e.canCapture) original.file.delete()
                     else {
                         val clip=original.copy(sequence=++videoSequence)
+                        VideoDiagnostics.recorded++
                         imageWorker.execute {
                             runCatching {
                                 VideoDiagnostics.preserve(clip,java.io.File(cacheDir,"video-preview"),false)
